@@ -1976,28 +1976,32 @@ class MainWindow(QMainWindow):
             self.logger.error(f"Ошибка при принудительном сохранении сессии: {e}", exc_info=True)
 
     def load_all_data(self):
-        # Добавляем оптимизацию для уменьшения частых сетевых операций
-        try:
-            self.show_status("Загрузка данных...", 2000)
-            self.logger.info("Загрузка всех данных из базы данных")
+        """Загрузка всех данных из базы данных (асинхронно)"""
+        self.show_status("Загрузка данных...", 3000)
+        self.logger.info("Запуск асинхронной загрузки данных из базы данных")
 
-            # Используем контроллер для загрузки данных
-            data = self.data_controller.load_shipments()
+        # Загружаем данные в фоновом потоке
+        self.async_manager.execute_async(
+            self.data_controller.load_shipments,
+            callback=self._on_load_shipments_finished,
+            error_callback=self._on_load_shipments_error
+        )
+
+    def _on_load_shipments_finished(self, data):
+        """Обработка успешной загрузки данных (вызывается в главном потоке)"""
+        try:
             self.shipments = data['shipments']
             self.group_shipments = data['group_shipments']
 
             self.logger.info(f"Загружено {len(self.shipments)} поставок и {len(self.group_shipments)} групп")
 
-            # Обновляем логику выбора текущей поставки, чтобы учесть возможные конфликты имен
+            # Восстанавливаем текущую поставку
             if self.current_shipment:
-                # Сначала ищем в обычных поставках
                 found_shipment = None
                 if self.current_shipment.destination_name in self.shipments:
                     found_shipment = self.shipments[self.current_shipment.destination_name]
                 else:
-                    # Если не найдено, ищем среди подпоставок в группе
                     for group_shipment in self.group_shipments.values():
-                        # Находим поставку по оригинальному имени
                         for sub_shipment_key, sub_shipment in group_shipment.sub_shipments.items():
                             if (hasattr(sub_shipment, 'original_destination_name') and
                                 sub_shipment.original_destination_name == self.current_shipment.destination_name) or \
@@ -2011,24 +2015,30 @@ class MainWindow(QMainWindow):
             else:
                 self.current_shipment = None
 
-            # Инициализируем кэш после загрузки всех данных
+            # Инициализируем кэш
             for shipment in self.shipments.values():
                 self.shipment_manager.update_cache(shipment)
 
             if self.first_load:
                 self.first_load = False
 
-            # Обновляем сессию пользователя для текущей поставки
+            # Обновляем сессию пользователя
             if self.current_shipment and hasattr(self, 'current_user') and self.current_user:
                 from database import update_user_session
-                # Используем оригинальное имя поставки для обновления сессии в базе данных
                 shipment_name_for_session = getattr(self.current_shipment, 'original_destination_name', self.current_shipment.destination_name)
                 update_user_session(shipment_name_for_session, self.current_user)
 
+            self.show_status("Данные загружены", 2000)
             self.logger.info("Загрузка всех данных завершена")
         except Exception as e:
-            self.logger.error(f"Ошибка при загрузке данных: {e}", exc_info=True)
-            QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить данные: {e}")
+            self.logger.error(f"Ошибка при обработке загруженных данных: {e}", exc_info=True)
+            QMessageBox.warning(self, "Ошибка", f"Не удалось обработать данные: {e}")
+
+    def _on_load_shipments_error(self, error_msg):
+        """Обработка ошибки загрузки данных"""
+        self.logger.error(f"Ошибка при загрузке данных: {error_msg}")
+        self.show_status("Ошибка загрузки данных", 3000)
+        QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить данные: {error_msg}")
 
     def update_ui(self):
         # Обновляем UI без проверки флага при явном вызове (например, при выборе поставки/коробки)

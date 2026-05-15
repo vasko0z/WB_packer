@@ -2021,10 +2021,6 @@ class ShipmentManager:
             # Обновляем интерфейс
             self.main_window.ui_updater.update_ui()
 
-            # Принудительно обновляем UI для немедленного отображения прогресса
-            from PyQt6.QtWidgets import QApplication
-            QApplication.processEvents()
-
             # Если поставка является частью групповой поставки, обновляем и её
             if (hasattr(self.main_window.current_shipment, 'parent_group') and
                 self.main_window.current_shipment.parent_group):

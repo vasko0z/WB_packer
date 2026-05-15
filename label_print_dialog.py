@@ -1005,119 +1005,140 @@ class LabelPrintDialog(QDialog):
         return sku_data
     
     def update_sku_table(self):
-        """Актуализировать таблицу SKU из файла SKU.xlsx"""
+        """Актуализировать таблицу SKU из файла SKU.xlsx (асинхронно)"""
         try:
-            from openpyxl import load_workbook
             import os
-            from database import execute_query
-            
             sku_path = "SKU/SKU.xlsx"
             
-            # Проверяем, существует ли файл
             if not os.path.exists(sku_path):
                 QMessageBox.critical(self, "Ошибка", f"Файл {sku_path} не найден!")
                 return
+            
+            # Запускаем асинхронную обработку
+            from PyQt6.QtCore import QThread, QObject, pyqtSignal
+            
+            class SKUWorker(QObject):
+                finished = pyqtSignal(dict)
+                error = pyqtSignal(str)
                 
-            # Удаляем все существующие данные из таблицы sku
-            execute_query("DELETE FROM sku")
+                def __init__(self, sku_path):
+                    super().__init__()
+                    self.sku_path = sku_path
+                
+                def run(self):
+                    try:
+                        from openpyxl import load_workbook
+                        from database import execute_query
+                        
+                        # Удаляем все существующие данные из таблицы sku
+                        execute_query("DELETE FROM sku")
+                        
+                        # Загружаем данные из Excel файла
+                        wb = load_workbook(self.sku_path)
+                        
+                        try:
+                            ws = wb["Лист1"]
+                        except KeyError:
+                            ws = wb.active
+                        
+                        # Получаем список всех PDF файлов
+                        pdf_barcodes = set()
+                        if os.path.exists("PDF"):
+                            pdf_barcodes = {f[:-4] for f in os.listdir("PDF") if f.endswith('.pdf')}
+                        
+                        table_barcodes = set()
+                        barcode_rows = {}
+                        
+                        for row in range(2, ws.max_row + 1):
+                            barcode_cell = ws.cell(row=row, column=1)
+                            if barcode_cell.value is None:
+                                continue
+                            barcode = str(barcode_cell.value)
+                            table_barcodes.add(barcode)
+                            barcode_rows[barcode] = row
+                        
+                        # Обновляем столбец "Этикетка (есть/нет)"
+                        for barcode, row in barcode_rows.items():
+                            label_status = "Есть" if barcode in pdf_barcodes else "Нет"
+                            ws.cell(row=row, column=4, value=label_status)
+                        
+                        # Лист "Добавить" для штрихкодов из PDF, но не в SKU
+                        try:
+                            add_ws = wb["Добавить"]
+                        except KeyError:
+                            add_ws = wb.create_sheet("Добавить")
+                            add_ws.cell(row=1, column=1, value="Штрихкод")
+                            add_ws.cell(row=1, column=2, value="Артикул")
+                            add_ws.cell(row=1, column=3, value="Наименование")
+                            add_ws.cell(row=1, column=4, value="Этикетка (есть/нет)")
+                        
+                        next_add_row = 2
+                        while next_add_row <= add_ws.max_row and add_ws.cell(row=next_add_row, column=1).value is not None:
+                            next_add_row += 1
+                        
+                        missing_barcodes = pdf_barcodes - table_barcodes
+                        for barcode in missing_barcodes:
+                            add_ws.cell(row=next_add_row, column=1, value=barcode)
+                            add_ws.cell(row=next_add_row, column=4, value="Есть")
+                            next_add_row += 1
+                        
+                        # Сохраняем Excel
+                        wb.save(self.sku_path)
+                        
+                        # Вставляем данные в БД
+                        records_with_labels = 0
+                        for row in range(2, ws.max_row + 1):
+                            barcode_cell = ws.cell(row=row, column=1)
+                            if barcode_cell.value is None:
+                                continue
+                            
+                            barcode = str(barcode_cell.value)
+                            article = ws.cell(row=row, column=2).value or ""
+                            name = ws.cell(row=row, column=3).value or ""
+                            
+                            execute_query(
+                                "INSERT INTO sku (barcode, article, name) VALUES (%s, %s, %s) ON CONFLICT (barcode) DO UPDATE SET article = EXCLUDED.article, name = EXCLUDED.name",
+                                (barcode, article, name)
+                            )
+                            
+                            if barcode in pdf_barcodes:
+                                records_with_labels += 1
+                        
+                        self.finished.emit({
+                            'records_with_labels': records_with_labels,
+                            'missing_barcodes_count': len(missing_barcodes),
+                        })
+                    except Exception as e:
+                        self.error.emit(str(e))
             
-            # Загружаем данные из Excel файла
-            wb = load_workbook(sku_path)
+            # Создаём и запускаем worker в отдельном потоке
+            self._sku_thread = QThread()
+            self._sku_worker = SKUWorker(sku_path)
+            self._sku_worker.moveToThread(self._sku_thread)
+            self._sku_thread.started.connect(self._sku_worker.run)
+            self._sku_worker.finished.connect(self._on_sku_update_finished)
+            self._sku_worker.error.connect(self._on_sku_update_error)
+            self._sku_worker.finished.connect(self._sku_thread.quit)
+            self._sku_worker.error.connect(self._sku_thread.quit)
+            self._sku_thread.finished.connect(self._sku_thread.deleteLater)
+            self._sku_worker.finished.connect(self._sku_worker.deleteLater)
+            self._sku_thread.start()
             
-            # Проверяем, есть ли лист "Лист1", если нет - используем активный лист
-            try:
-                ws = wb["Лист1"]
-            except KeyError:
-                ws = wb.active
-                # Проверяем, что лист имеет правильную структуру (шапка в первой строке)
-                first_row_values = [cell.value for cell in ws[1]]
-                if not first_row_values or not any("штрихкод" in str(val).lower() if val else False for val in first_row_values[:4]):
-                    # Если первая строка не содержит заголовков, предполагаем стандартный порядок
-                    pass  # Продолжаем использовать этот лист как есть
-            
-            # Актуализируем информацию о наличии PDF файлов
-            # Получаем список всех PDF файлов в папке PDF
-            pdf_files = []
-            if os.path.exists("PDF"):
-                pdf_files = [f[:-4] for f in os.listdir("PDF") if f.endswith('.pdf')]  # Убираем расширение .pdf
-            
-            # Создаем словарь для быстрого поиска штрихкодов из PDF файлов
-            pdf_barcodes = set(pdf_files)
-            
-            # Создаем словарь соответствия штрихкодов из таблицы
-            table_barcodes = set()
-            barcode_rows = {}  # Сохраняем номера строк для каждого штрихкода
-            
-            for row in range(2, ws.max_row + 1):
-                barcode_cell = ws.cell(row=row, column=1)
-                if barcode_cell.value is None:
-                    continue
-                barcode = str(barcode_cell.value)
-                table_barcodes.add(barcode)
-                barcode_rows[barcode] = row
-            
-            # Обновляем столбец "Этикетка (есть/нет)" для существующих записей
-            for barcode, row in barcode_rows.items():
-                label_status = "Есть" if barcode in pdf_barcodes else "Нет"
-                # Находим столбец "Этикетка (есть/нет)" - это 4-й столбец
-                ws.cell(row=row, column=4, value=label_status)
-            
-            # Находим или создаем лист "Добавить" и добавляем туда штрихкоды, которые есть в PDF, но нет в таблице SKU
-            try:
-                add_ws = wb["Добавить"]
-            except KeyError:
-                # Если лист "Добавить" не существует, создаем его
-                add_ws = wb.create_sheet("Добавить")
-                # Добавляем заголовки в новый лист
-                add_ws.cell(row=1, column=1, value="Штрихкод")
-                add_ws.cell(row=1, column=2, value="Артикул")
-                add_ws.cell(row=1, column=3, value="Наименование")
-                add_ws.cell(row=1, column=4, value="Этикетка (есть/нет)")
-            
-            # Находим следующую пустую строку в листе "Добавить"
-            next_add_row = 2  # Начинаем с 2-й строки, т.к. 1-я строка - заголовки
-            while next_add_row <= add_ws.max_row and add_ws.cell(row=next_add_row, column=1).value is not None:
-                next_add_row += 1
-            
-            # Добавляем штрихкоды, которые есть в PDF, но нет в таблице SKU
-            missing_barcodes = pdf_barcodes - table_barcodes
-            for barcode in missing_barcodes:
-                add_ws.cell(row=next_add_row, column=1, value=barcode)
-                add_ws.cell(row=next_add_row, column=4, value="Есть")  # Устанавливаем статус "Есть" для новых записей
-                next_add_row += 1
-            
-            # Загружаем данные в базу данных ТОЛЬКО для строк, у которых статус "Есть" в основном листе
-            for row in range(2, ws.max_row + 1):  # начиная со второй строки (первая строка заголовки)
-                barcode_cell = ws.cell(row=row, column=1)
-                if barcode_cell.value is None:
-                    continue  # Пропускаем пустые строки
-                    
-                barcode = str(barcode_cell.value)
-                label_status_cell = ws.cell(row=row, column=4)  # Четвертый столбец - статус наличия этикетки
-                label_status = label_status_cell.value
-
-                # Получаем данные из Excel
-                article_cell = ws.cell(row=row, column=2)
-                article = article_cell.value if article_cell.value is not None else ""
-                name_cell = ws.cell(row=row, column=3)
-                name = name_cell.value if name_cell.value is not None else ""
-
-                # Вставляем данные в базу для ВСЕХ записей из Excel
-                # Используем PostgreSQL синтаксис
-                execute_query("INSERT INTO sku (barcode, article, name) VALUES (%s, %s, %s) ON CONFLICT (barcode) DO UPDATE SET article = EXCLUDED.article, name = EXCLUDED.name", (barcode, article, name))
-            
-            # Сохраняем изменения в Excel файле
-            wb.save(sku_path)
-            
-            # Подсчитываем количество записей, у которых есть этикетки
-            records_with_labels = len([barcode for barcode in pdf_barcodes if barcode in table_barcodes])
-            
-            # Показываем сообщение об успешном обновлении
-            QMessageBox.information(self, "Успех", f"Таблица SKU успешно обновлена из файла Excel!\nКоличество штрихкодов с этикетками: {records_with_labels}\nКоличество новых штрихкодов для добавления: {len(missing_barcodes)}")
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось обновить таблицу: {str(e)}")
-            import traceback
-            print(f"Подробности ошибки: {traceback.format_exc()}")
+            QMessageBox.critical(self, "Ошибка", f"Не удалось запустить обновление таблицы: {str(e)}")
+    
+    def _on_sku_update_finished(self, result):
+        """Обработка успешного обновления SKU"""
+        QMessageBox.information(
+            self, "Успех",
+            f"Таблица SKU успешно обновлена из файла Excel!\n"
+            f"Количество штрихкодов с этикетками: {result['records_with_labels']}\n"
+            f"Количество новых штрихкодов для добавления: {result['missing_barcodes_count']}"
+        )
+    
+    def _on_sku_update_error(self, error_msg):
+        """Обработка ошибки обновления SKU"""
+        QMessageBox.critical(self, "Ошибка", f"Не удалось обновить таблицу: {error_msg}")
     
     def print_product_label(self):
         """Печать этикетки на товар"""

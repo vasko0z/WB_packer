@@ -1052,9 +1052,6 @@ class MainWindow(QMainWindow):
             self.current_theme = "Светлая"
         self.apply_settings()
         self.save_user_settings()
-        # Статус скрыт, сообщения не отображаются
-        # self.statusBar().showMessage(f"Тема изменена на: {self.current_theme}", 2000)
-        QApplication.processEvents()  # Force UI update after theme change
 
     def on_box_table_item_double_clicked(self, item):
         """
@@ -1384,13 +1381,10 @@ class MainWindow(QMainWindow):
             except (ValueError, AttributeError):
                 # Если не удалось восстановить сохраненные размеры, устанавливаем стандартные
                 QTimer.singleShot(300, lambda: self.main_splitter.setSizes([200, 300, 800]))
-                # Принудительно обновляем геометри������ сплиттера
+                # Принудительно обновляем геометрию сплиттера
                 QTimer.singleShot(350, lambda: self.main_splitter.updateGeometry())
                 # Дополнительно обновляем все компоненты сплиттера
                 QTimer.singleShot(400, lambda: self.update_splitter_widgets_geometry())
-        
-        # Принудительно обновляем интерфейс для обеспечения правильного отображения после загрузки состояния
-        QApplication.processEvents()
         
         # Дополнительно обновляем таблицы для гарантии отображения
         if hasattr(self, 'shipment_table') and self.shipment_table:

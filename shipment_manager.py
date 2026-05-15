@@ -1928,7 +1928,7 @@ class ShipmentManager:
                 "В текущей поставке нет товаров. Сначала добавьте товары в поставку.")
             return
         
-        self.main_window.show_status("Импорт коробок...", 3000)
+        self.main_window.show_progress("Импорт коробок...")
         
         # Запускаем асинхронную обработку файла
         self.async_manager.execute_async(
@@ -1994,6 +1994,7 @@ class ShipmentManager:
     def _on_import_boxes_finished(self, result):
         """Обработка успешного импорта коробок"""
         if not result['success']:
+            self.main_window.hide_progress("Ошибка импорта", 3000)
             QMessageBox.critical(self.main_window, "Ошибка", result['error'])
             return
         
@@ -2034,9 +2035,11 @@ class ShipmentManager:
             if len(result['skipped_barcodes']) > 5:
                 message += f"\n... и ещё {len(result['skipped_barcodes']) - 5} штрихкодов"
         
+        self.main_window.hide_progress(message.split('\n')[0], 3000)
         QMessageBox.information(self.main_window, "Успех", message)
 
     def _on_import_boxes_error(self, error_msg):
         """Обработка ошибки импорта коробок"""
         self.logger.error(f"Ошибка импорта коробок: {error_msg}")
+        self.main_window.hide_progress("Ошибка импорта", 3000)
         QMessageBox.critical(self.main_window, "Ошибка", f"Ошибка импорта коробок:\n{error_msg}")

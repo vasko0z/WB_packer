@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLineEdit, QTableWidgetItem,
     QFileDialog, QLabel, QMessageBox, QSplitter, QHeaderView,
-    QMenu, QAbstractItemView, QDialog, QTreeWidget, QTreeWidgetItem, QFrame
+    QMenu, QAbstractItemView, QDialog, QTreeWidget, QTreeWidgetItem, QFrame, QProgressBar
 )
 from custom_table_widget import CustomTableWidget
 from app_constants import ColumnIndex
@@ -71,6 +71,12 @@ class MainWindow(QMainWindow):
         # Инициализация статус-бара
         self.statusBar().showMessage("Готово")
         self.statusBar().setSizeGripEnabled(True)
+        
+        # Прогресс-бар в статус-баре
+        self.status_progress_bar = QProgressBar()
+        self.status_progress_bar.setMaximumWidth(200)
+        self.status_progress_bar.setVisible(False)
+        self.statusBar().addPermanentWidget(self.status_progress_bar)
         
         # Инициализация переменных
         self.saving = False
@@ -1970,7 +1976,7 @@ class MainWindow(QMainWindow):
 
     def load_all_data(self):
         """Загрузка всех данных из базы данных (асинхронно)"""
-        self.show_status("Загрузка данных...", 3000)
+        self.show_progress("Загрузка данных...", 100)
         self.logger.info("Запуск асинхронной загрузки данных из базы данных")
 
         # Загружаем данные в фоновом потоке
@@ -2021,7 +2027,7 @@ class MainWindow(QMainWindow):
                 shipment_name_for_session = getattr(self.current_shipment, 'original_destination_name', self.current_shipment.destination_name)
                 update_user_session(shipment_name_for_session, self.current_user)
 
-            self.show_status("Данные загружены", 2000)
+            self.hide_progress("Данные загружены", 2000)
             self.logger.info("Загрузка всех данных завершена")
 
             # Обновляем UI с загруженными данными
@@ -2029,12 +2035,13 @@ class MainWindow(QMainWindow):
                 self.ui_updater.update_ui()
         except Exception as e:
             self.logger.error(f"Ошибка при обработке загруженных данных: {e}", exc_info=True)
+            self.hide_progress("Ошибка загрузки данных", 3000)
             QMessageBox.warning(self, "Ошибка", f"Не удалось обработать данные: {e}")
 
     def _on_load_shipments_error(self, error_msg):
         """Обработка ошибки загрузки данных"""
         self.logger.error(f"Ошибка при загрузке данных: {error_msg}")
-        self.show_status("Ошибка загрузки данных", 3000)
+        self.hide_progress("Ошибка загрузки данных", 3000)
         QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить данные: {error_msg}")
 
     def update_ui(self):
@@ -3027,7 +3034,7 @@ class MainWindow(QMainWindow):
             
             if reply == QMessageBox.StandardButton.Yes:
                 self.force_save_session()
-                self.show_status(f"Архивация поставки «{shipment_name}»...", 3000)
+                self.show_progress(f"Архивация поставки «{shipment_name}»...")
                 
                 self.async_manager.execute_async(
                     self.data_controller.archive_shipment,
@@ -3043,13 +3050,15 @@ class MainWindow(QMainWindow):
         """Обработка успешной архивации поставки"""
         if success:
             self.load_all_data()
-            QMessageBox.information(self, "Успех", f"Поставка «{shipment_name}» отправлена в архив")
+            self.hide_progress(f"Поставка «{shipment_name}» архивирована", 2000)
         else:
+            self.hide_progress("Ошибка архивации", 3000)
             QMessageBox.critical(self, "Ошибка", "Не удалось отправить поставку в архив")
 
     def _on_archive_shipment_error(self, error_msg, shipment_name):
         """Обработка ошибки архивации поставки"""
         self.logger.error(f"Ошибка при архивации поставки {shipment_name}: {error_msg}")
+        self.hide_progress("Ошибка архивации", 3000)
         QMessageBox.critical(self, "Ошибка", f"Ошибка при архивации поставки:\n{error_msg}")
 
     def archive_group_shipment(self, group_name):
@@ -3097,13 +3106,15 @@ class MainWindow(QMainWindow):
         """Обработка успешной архивации групповой поставки"""
         if success:
             self.load_all_data()
-            QMessageBox.information(self, "Успех", f"Групповая поставка «{group_name}» отправлена в архив")
+            self.hide_progress(f"Групповая поставка «{group_name}» архивирована", 2000)
         else:
+            self.hide_progress("Ошибка архивации", 3000)
             QMessageBox.critical(self, "Ошибка", "Не удалось отправить групповую поставку в архив")
 
     def _on_archive_group_shipment_error(self, error_msg, group_name):
         """Обработка ошибки архивации групповой поставки"""
         self.logger.error(f"Ошибка при архивации групповой поставки {group_name}: {error_msg}")
+        self.hide_progress("Ошибка архивации", 3000)
         QMessageBox.critical(self, "Ошибка", f"Ошибка при архивации групповой поставки:\n{error_msg}")
 
     def start_shipment_check(self):
@@ -3207,14 +3218,14 @@ class MainWindow(QMainWindow):
             self.improved_sync_handler = ImprovedMoyskladSync(self.ui_updater)
             
             # Подключаем сигналы для обновления прогресса
-            # self.improved_sync_handler.progress_updated.connect(
-            #    lambda current, total: self.statusBar().showMessage(f"Получение данных из МойСклад... ({current}/{total})", 5000)
-            # )
+            self.improved_sync_handler.progress_updated.connect(
+                lambda current, total: self.update_progress(current, f"Синхронизация МойСклад... ({current}/{total})")
+            )
             self.improved_sync_handler.sync_completed.connect(self._on_sync_completed)
             self.improved_sync_handler.sync_error.connect(self._on_sync_error)
-            # self.improved_sync_handler.sync_started.connect(
-            #    lambda: self.statusBar().showMessage("Начало синхронизации остатков с МойСклад...", 3000)
-            # )
+            self.improved_sync_handler.sync_started.connect(
+                lambda: self.show_progress("Начало синхронизации остатков с МойСклад...")
+            )
             
             # Запускаем асинхронную синхронизацию
             self.improved_sync_handler.sync_stocks_async(non_archived_shipments)
@@ -3269,20 +3280,19 @@ class MainWindow(QMainWindow):
                 all_shipments.update(group_shipment.sub_shipments)
             
             non_archived_shipments = {name: shipment for name, shipment in all_shipments.items() if not shipment.archived}
-            # Статус скрыт, сообщения не отображаются
-            # self.statusBar().showMessage(f"Синхронизация остатков с МойСклад для {len(non_archived_shipments)} ппоставккуавок завершена", 3000)
             
+            self.hide_progress(f"Синхронизация завершена: {len(non_archived_shipments)} поставок", 3000)
             self.logger.info("Синхронизация остатков завершена успешно")
         except Exception as e:
             self.logger.error(f"Ошибка при обработке завершения синхронизации: {e}", exc_info=True)
+            self.hide_progress("Ошибка синхронизации", 3000)
     
     def _on_sync_error(self, error_message):
-        """Обработкатка ошибки асинхронной синхронизации"""
+        """Обработка ошибки асинхронной синхронизации"""
         from PyQt6.QtWidgets import QMessageBox
         self.logger.error(f"Ошибка при синхронизации остатков с МойСклад: {error_message}")
+        self.hide_progress("Ошибка синхронизации", 3000)
         QMessageBox.critical(self, "Ошибка", f"Ошибка при синхронизации остатков с МойСклад:\n{error_message}")
-        # Статус скрыт, сообщения не отображаются
-        # self.statusBar().showMessage("Синхронизация остатков завершена с ошибкой", 3000)
 
     def open_check_stock_dialog(self):
         """
@@ -3379,4 +3389,22 @@ class MainWindow(QMainWindow):
 
     def show_status(self, message: str, timeout: int = 3000):
         """Отображает сообщение в статус-баре"""
+        self.statusBar().showMessage(message, timeout)
+
+    def show_progress(self, message: str, max_value: int = 100):
+        """Показывает прогресс-бар в статус-баре"""
+        self.status_progress_bar.setValue(0)
+        self.status_progress_bar.setMaximum(max_value)
+        self.status_progress_bar.setVisible(True)
+        self.statusBar().showMessage(message)
+
+    def update_progress(self, value: int, message: str = ""):
+        """Обновляет прогресс-бар"""
+        self.status_progress_bar.setValue(value)
+        if message:
+            self.statusBar().showMessage(message)
+
+    def hide_progress(self, message: str = "Готово", timeout: int = 2000):
+        """Скрывает прогресс-бар и показывает сообщение"""
+        self.status_progress_bar.setVisible(False)
         self.statusBar().showMessage(message, timeout)

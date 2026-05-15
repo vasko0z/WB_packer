@@ -474,23 +474,10 @@ class SettingsDialog(QDialog):
 
     def update_sku_table(self):
         """Актуализировать таблицу SKU"""
-        if self.parent and hasattr(self.parent, 'update_sku_table'):
-            self.parent.update_sku_table()
+        if self.parent and hasattr(self.parent, 'update_sku_table_async'):
+            self.parent.update_sku_table_async()
         else:
-            # Вызываем функцию из label_print_dialog
-            try:
-                from label_print_dialog import LabelPrintDialog
-                
-                # Создаем временный диалог для обновления SKU
-                temp_dialog = LabelPrintDialog()
-                temp_dialog.update_sku_table()
-                
-                QMessageBox.information(
-                    self, "Успех",
-                    "Таблица SKU успешно обновлена!"
-                )
-            except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Ошибка обновления таблицы SKU:\n{e}")
+            QMessageBox.warning(self, "Ошибка", "Не удалось обновить таблицу SKU: главное окно недоступно.")
 
     def open_label_print_settings(self):
         """Открыть настройки печати этикеток"""

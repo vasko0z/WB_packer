@@ -198,6 +198,9 @@ class MainWindow(QMainWindow):
             # Это гарантирует, что дерево поставок будет заполнено данными
             self.load_all_data()
 
+            # Автоматически обновляем таблицу SKU при старте
+            QTimer.singleShot(1000, self.update_sku_table_async)
+
             # Теперь применяем настройки темы и UI ПОСЛЕ загрузки данных
             # Это обеспечит корректное отображение с правильной темой
             self.apply_settings()
@@ -3327,7 +3330,113 @@ class MainWindow(QMainWindow):
            import logging
            logger = logging.getLogger(__name__)
            logger.error(f"Ошибка при открытии диалога печати этикеток: {e}", exc_info=True)
-           QMessageBox.critical(self, "Ошибка", f"Ошибка при открытии диалога печати этикеток:\n{e}")
+
+    def update_sku_table_async(self):
+        """Асинхронное обновление таблицы SKU через async_manager"""
+        import os
+        sku_path = "SKU/SKU.xlsx"
+        
+        if not os.path.exists(sku_path):
+            self.logger.warning(f"Файл SKU {sku_path} не найден, пропускаем обновление")
+            return
+        
+        self.show_progress("Обновление таблицы SKU...")
+        self.logger.info("Запуск асинхронного обновления таблицы SKU")
+        
+        self.async_manager.execute_async(
+            self._update_sku_table_worker,
+            callback=self._on_sku_update_finished,
+            error_callback=self._on_sku_update_error,
+            sku_path=sku_path
+        )
+
+    def _update_sku_table_worker(self, sku_path):
+        """Worker для обновления SKU в фоновом потоке"""
+        import os
+        from openpyxl import load_workbook
+        from database import execute_query
+        
+        execute_query("DELETE FROM sku")
+        
+        wb = load_workbook(sku_path)
+        try:
+            ws = wb["Лист1"]
+        except KeyError:
+            ws = wb.active
+        
+        pdf_barcodes = set()
+        if os.path.exists("PDF"):
+            pdf_barcodes = {f[:-4] for f in os.listdir("PDF") if f.endswith('.pdf')}
+        
+        table_barcodes = set()
+        barcode_rows = {}
+        
+        for row in range(2, ws.max_row + 1):
+            barcode_cell = ws.cell(row=row, column=1)
+            if barcode_cell.value is None:
+                continue
+            barcode = str(barcode_cell.value)
+            table_barcodes.add(barcode)
+            barcode_rows[barcode] = row
+        
+        for barcode, row in barcode_rows.items():
+            label_status = "Есть" if barcode in pdf_barcodes else "Нет"
+            ws.cell(row=row, column=4, value=label_status)
+        
+        try:
+            add_ws = wb["Добавить"]
+        except KeyError:
+            add_ws = wb.create_sheet("Добавить")
+            add_ws.cell(row=1, column=1, value="Штрихкод")
+            add_ws.cell(row=1, column=2, value="Артикул")
+            add_ws.cell(row=1, column=3, value="Наименование")
+            add_ws.cell(row=1, column=4, value="Этикетка (есть/нет)")
+        
+        next_add_row = 2
+        while next_add_row <= add_ws.max_row and add_ws.cell(row=next_add_row, column=1).value is not None:
+            next_add_row += 1
+        
+        missing_barcodes = pdf_barcodes - table_barcodes
+        for barcode in missing_barcodes:
+            add_ws.cell(row=next_add_row, column=1, value=barcode)
+            add_ws.cell(row=next_add_row, column=4, value="Есть")
+            next_add_row += 1
+        
+        wb.save(sku_path)
+        
+        records_with_labels = 0
+        for row in range(2, ws.max_row + 1):
+            barcode_cell = ws.cell(row=row, column=1)
+            if barcode_cell.value is None:
+                continue
+            barcode = str(barcode_cell.value)
+            article = ws.cell(row=row, column=2).value or ""
+            name = ws.cell(row=row, column=3).value or ""
+            
+            execute_query(
+                "INSERT INTO sku (barcode, article, name) VALUES (%s, %s, %s) ON CONFLICT (barcode) DO UPDATE SET article = EXCLUDED.article, name = EXCLUDED.name",
+                (barcode, article, name)
+            )
+            
+            if barcode in pdf_barcodes:
+                records_with_labels += 1
+        
+        return {
+            'records_with_labels': records_with_labels,
+            'missing_barcodes_count': len(missing_barcodes),
+        }
+
+    def _on_sku_update_finished(self, result):
+        """Обработка успешного обновления SKU"""
+        self.hide_progress(f"SKU обновлено: {result['records_with_labels']} с этикетками", 3000)
+        self.logger.info(f"Таблица SKU обновлена: {result['records_with_labels']} записей с этикетками, {result['missing_barcodes_count']} новых")
+
+    def _on_sku_update_error(self, error_msg):
+        """Обработка ошибки обновления SKU"""
+        self.hide_progress("Ошибка обновления SKU", 3000)
+        self.logger.error(f"Ошибка обновления таблицы SKU: {error_msg}")
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.critical(self, "Ошибка", f"Ошибка обновления таблицы SKU:\n{error_msg}")
 
     def print_product_label(self):
        """Печать этикетки на товар (открывает диалог печати этикеток)"""

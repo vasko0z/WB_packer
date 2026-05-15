@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
     QDialog, QTreeWidget, QTreeWidgetItem, QComboBox, QFrame
 )
 from custom_table_widget import CustomTableWidget
-from PyQt6.QtPrintSupport import QPrinter
 from app_constants import ColumnIndex
 
 import database

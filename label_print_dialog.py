@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                             QPushButton, QLabel, QLineEdit, QDialog, QMessageBox, QMenu, QMenuBar,
                             QDialogButtonBox, QTabWidget, QGroupBox, QFormLayout, QSpinBox,
                             QFileDialog, QProgressDialog, QInputDialog, QPlainTextEdit, QGridLayout)
-from PyQt6.QtCore import Qt, QSizeF, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QSizeF, QThread, pyqtSignal, QObject
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 from PyQt6.QtGui import QFont, QPageSize, QPageLayout, QPainter, QPen, QImage, QPixmap, QIntValidator
 import pandas as pd

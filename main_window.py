@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         
         # Инициализация статус-бара
         self.statusBar().showMessage("Готово")
+        self.statusBar().setSizeGripEnabled(True)
         
         # Инициализация переменных
         self.saving = False
@@ -1977,6 +1978,7 @@ class MainWindow(QMainWindow):
     def load_all_data(self):
         # Добавляем оптимизацию для уменьшения частых сетевых операций
         try:
+            self.show_status("Загрузка данных...", 2000)
             self.logger.info("Загрузка всех данных из базы данных")
 
             # Используем контроллер для загрузки данных
@@ -3136,16 +3138,19 @@ class MainWindow(QMainWindow):
             from PyQt6.QtWidgets import QMessageBox
             
             self.logger.info("Начало улучшенной синхронизации остатков с МойСклад для всех неархивных поставок")
+            self.show_status("Синхронизация остатков с МойСклад...")
 
             # Проверяем, включена ли интеграция
             if not database.get_moysklad_enabled():
                 self.logger.warning("Интеграция с МойСклад отключена")
+                self.show_status("Интеграция с МойСклад отключена", 3000)
                 QMessageBox.warning(self, "Ошибка", "Интеграция с МойСклад отключена. Включите интеграцию в настройках.")
                 return
 
             # Проверяем наличие токена МойСклад (теперь глобальный)
             if not database.get_moysklad_token():
                 self.logger.warning("Токен МойСклад не настроен")
+                self.show_status("Токен МойСклад не настроен", 3000)
                 QMessageBox.warning(self, "Ошибка", "Токен МойСклад не настроен. Проверьте настройки интеграции.")
                 return
 
@@ -3348,3 +3353,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'scan_input') and self.scan_input:
             self.scan_input.setFocus()
             self.scan_input.selectAll()  # Выделяем весь текст для удобства
+
+    def show_status(self, message: str, timeout: int = 3000):
+        """Отображает сообщение в статус-баре"""
+        self.statusBar().showMessage(message, timeout)

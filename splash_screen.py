@@ -5,7 +5,7 @@ Simple splash screen for application startup
 import sys
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap, QFont
-from PyQt6.QtWidgets import QSplashScreen, QLabel, QWidget, QVBoxLayout
+from PyQt6.QtWidgets import QSplashScreen, QLabel, QWidget, QVBoxLayout, QProgressBar
 
 
 def get_version_string():
@@ -21,7 +21,7 @@ class SplashScreen(QSplashScreen):
     def __init__(self):
         try:
             # Create a simple pixmap for splash
-            pixmap = QPixmap(400, 300)
+            pixmap = QPixmap(400, 320)
             pixmap.fill(Qt.GlobalColor.white)
 
             super().__init__(pixmap, Qt.WindowType.SplashScreen)
@@ -35,13 +35,31 @@ class SplashScreen(QSplashScreen):
             self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.loading_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
             self.loading_label.setStyleSheet("color: #333333; background-color: white;")
-            self.loading_label.setGeometry(0, 130, 400, 40)
+            self.loading_label.setGeometry(0, 120, 400, 40)
+
+            # Progress bar
+            self.progress_bar = QProgressBar(self)
+            self.progress_bar.setGeometry(50, 170, 300, 20)
+            self.progress_bar.setStyleSheet("""
+                QProgressBar {
+                    border: 2px solid #ccc;
+                    border-radius: 5px;
+                    text-align: center;
+                    background-color: #f0f0f0;
+                }
+                QProgressBar::chunk {
+                    border-radius: 3px;
+                    background-color: #4CAF50;
+                }
+            """)
+            self.progress_bar.setValue(0)
+            self.progress_bar.setMaximum(100)
 
             self.version_label = QLabel(f"Версия {version}", self)
             self.version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.version_label.setFont(QFont("Arial", 10))
             self.version_label.setStyleSheet("color: #666666; background-color: white;")
-            self.version_label.setGeometry(0, 170, 400, 20)
+            self.version_label.setGeometry(0, 200, 400, 20)
 
             # Set a timeout to auto-close if something goes wrong
             self.auto_close_timer = QTimer()
@@ -54,6 +72,12 @@ class SplashScreen(QSplashScreen):
         except Exception as e:
             print(f"Error initializing SplashScreen: {e}")
             raise
+
+    def set_progress(self, value, message=None):
+        """Update progress bar value and optional message"""
+        self.progress_bar.setValue(value)
+        if message:
+            self.loading_label.setText(message)
 
     def _auto_close(self):
         """Auto-close splash screen if it hangs"""

@@ -25,22 +25,25 @@ if __name__ == "__main__":
         from main_window import MainWindow
 
         if splash:
-            splash.loading_label.setText("Применение темы...")
+            splash.set_progress(25, "Применение темы...")
 
         apply_theme(app, config.DEFAULT_THEME)
 
         if splash:
-            splash.loading_label.setText("Создание интерфейса...")
+            splash.set_progress(50, "Создание интерфейса...")
 
         window = MainWindow()
 
         if splash:
-            splash.loading_label.setText("Завершение загрузки...")
+            splash.set_progress(75, "Загрузка данных...")
 
         window.show()
         logger.info("Главное окно отображено")
 
         QTimer.singleShot(0, window.deferred_initialization)
+
+        if splash:
+            splash.set_progress(100, "Готово!")
 
         hide_splash(splash)
         

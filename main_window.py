@@ -403,6 +403,7 @@ class MainWindow(QMainWindow):
         buttons_layout = QHBoxLayout()
 
         self.new_shipment_btn = QPushButton("+ Поставка")
+        self.new_shipment_gh_btn = QPushButton("+ Поставка GH")
         self.new_box_btn = QPushButton("+ Коробка")
         self.shipment_check_btn = QPushButton("Проверка")
         self.print_labels_btn = QPushButton("Этикетки")
@@ -417,8 +418,10 @@ class MainWindow(QMainWindow):
         # Эти кнопки подключаем напрямую:
         self.moysklad_sync_btn.clicked.connect(self.sync_moysklad_stocks)
         self.check_stock_btn.clicked.connect(self.open_check_stock_dialog)
+        self.new_shipment_gh_btn.clicked.connect(self.import_shipment_from_google_sheets)
 
         buttons_layout.addWidget(self.new_shipment_btn)
+        buttons_layout.addWidget(self.new_shipment_gh_btn)
         buttons_layout.addWidget(self.new_box_btn)
         buttons_layout.addWidget(self.shipment_check_btn)
         buttons_layout.addWidget(self.print_labels_btn)
@@ -437,7 +440,7 @@ class MainWindow(QMainWindow):
         self._apply_fixed_colorful_button_styles()
 
         # Принудительно обновляем кнопки
-        buttons = [self.new_shipment_btn, self.new_box_btn,
+        buttons = [self.new_shipment_btn, self.new_shipment_gh_btn, self.new_box_btn,
                    self.shipment_check_btn, self.print_labels_btn, self.moysklad_sync_btn,
                    self.check_stock_btn]
         for btn in buttons:
@@ -1764,6 +1767,7 @@ class MainWindow(QMainWindow):
         # Фиксированные цвета для кнопок (по умолчанию)
         default_colors = {
             'new_shipment': "#4CAF50",  # Зеленый
+            'new_shipment_gh': "#8BC34A",  # Светло-зеленый
             'new_box': "#2196F3",  # Синий
             'shipment_check': "#9C27B0",  # Фиолетовый
             'print_labels': "#00BCD4",  # Голубой
@@ -1776,6 +1780,7 @@ class MainWindow(QMainWindow):
         
         # Применяем цвета к кнопкам
         self.new_shipment_btn.setStyleSheet(self.get_button_style(colors.get('new_shipment', default_colors['new_shipment'])))
+        self.new_shipment_gh_btn.setStyleSheet(self.get_button_style(colors.get('new_shipment_gh', default_colors['new_shipment_gh'])))
         self.new_box_btn.setStyleSheet(self.get_button_style(colors.get('new_box', default_colors['new_box'])))
         self.shipment_check_btn.setStyleSheet(self.get_button_style(colors.get('shipment_check', default_colors['shipment_check'])))
         self.print_labels_btn.setStyleSheet(self.get_button_style(colors.get('print_labels', default_colors['print_labels'])))
@@ -1830,6 +1835,7 @@ class MainWindow(QMainWindow):
         # Генерируем случайные цвета для каждой кнопки
         colors = {
             'new_shipment': generate_random_color(),
+            'new_shipment_gh': generate_random_color(),
             'new_box': generate_random_color(),
             'shipment_check': generate_random_color(),
             'print_labels': generate_random_color(),
@@ -1842,6 +1848,7 @@ class MainWindow(QMainWindow):
         
         # Применяем цвета к кнопкам
         self.new_shipment_btn.setStyleSheet(self.get_button_style(colors['new_shipment']))
+        self.new_shipment_gh_btn.setStyleSheet(self.get_button_style(colors['new_shipment_gh']))
         self.new_box_btn.setStyleSheet(self.get_button_style(colors['new_box']))
         self.shipment_check_btn.setStyleSheet(self.get_button_style(colors['shipment_check']))
         self.print_labels_btn.setStyleSheet(self.get_button_style(colors['print_labels']))
@@ -2067,6 +2074,142 @@ class MainWindow(QMainWindow):
         """Создание новой поставки (обычной или группуовой)
         Тип поставки определяется автоматически по структуре файла Excel"""
         self.shipment_operations.start_new_shipment()
+
+    def import_shipment_from_google_sheets(self):
+        """Импорт поставки из Google Sheets"""
+        try:
+            import gspread
+            from google.oauth2.service_account import Credentials
+        except ImportError:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Ошибка", "Установите gspread: pip install gspread google-auth")
+            return
+        
+        import os
+        credentials_path = os.path.join(os.path.dirname(__file__), "e-object-470910-p6-3500f3ddbdd3.json")
+        if not os.path.exists(credentials_path):
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Ошибка", f"Файл credentials не найден: {credentials_path}")
+            return
+        
+        try:
+            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+            creds = Credentials.from_service_account_file(credentials_path, scopes=scope)
+            client = gspread.authorize(creds)
+            
+            # ID таблицы поставок
+            spreadsheet_id = "1OGgsS0T4qaEekJgEkVTplZfoeQ7MeMth8o8eJTqnJGA"
+            spreadsheet = client.open_by_key(spreadsheet_id)
+            
+            # Получаем список листов
+            worksheets = spreadsheet.worksheets()
+            if not worksheets:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Ошибка", "Таблица не содержит листов")
+                return
+            
+            # Показываем диалог выбора листа
+            from PyQt6.QtWidgets import QInputDialog
+            sheet_names = [ws.title for ws in worksheets]
+            sheet_name, ok = QInputDialog.getItem(
+                self, "Выбор листа",
+                "Выберите лист для импорта поставки:",
+                sheet_names, 0, False
+            )
+            
+            if not ok or not sheet_name:
+                return
+            
+            # Запускаем асинхронный импорт
+            self.show_busy_progress(f"Импорт поставки '{sheet_name}'...")
+            self.logger.info(f"Запуск импорта поставки из Google Sheets: {sheet_name}")
+            
+            self.async_manager.execute_async(
+                self._import_shipment_from_sheet_worker,
+                callback=self._on_import_shipment_finished,
+                error_callback=self._on_import_shipment_error,
+                spreadsheet=spreadsheet,
+                sheet_name=sheet_name
+            )
+        except Exception as e:
+            self.logger.error(f"Ошибка при импорте из Google Sheets: {e}", exc_info=True)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при импорте из Google Sheets:\n{e}")
+
+    def _import_shipment_from_sheet_worker(self, spreadsheet, sheet_name):
+        """Worker для импорта поставки из Google Sheets в фоновом потоке"""
+        import pandas as pd
+        from io import StringIO
+        
+        worksheet = spreadsheet.worksheet(sheet_name)
+        
+        # Получаем все данные из листа
+        all_values = worksheet.get_all_values()
+        
+        if not all_values or len(all_values) < 2:
+            raise ValueError(f"Лист '{sheet_name}' пуст или содержит только заголовки")
+        
+        # Находим строку заголовков
+        header_row_idx = 0
+        for i, row in enumerate(all_values[:10]):
+            row_lower = [str(cell).lower() for cell in row]
+            if any('штрихкод' in cell or 'шк' in cell or 'barcode' in cell for cell in row_lower):
+                header_row_idx = i
+                break
+        
+        # Создаём DataFrame
+        headers = all_values[header_row_idx]
+        data_rows = all_values[header_row_idx + 1:]
+        
+        if not data_rows:
+            raise ValueError(f"Лист '{sheet_name}' не содержит данных")
+        
+        # Преобразуем в формат для pandas
+        df = pd.DataFrame(data_rows, columns=headers)
+        
+        # Определяем колонку штрихкодов
+        barcode_col = None
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if 'штрихкод' in col_lower or 'шк' in col_lower or 'barcode' in col_lower:
+                barcode_col = col
+                break
+        
+        if barcode_col is None and len(df.columns) > 0:
+            barcode_col = df.columns[0]
+        
+        if barcode_col is None:
+            raise ValueError("Не найдена колонка со штрихкодами")
+        
+        # Определяем тип поставки (одиночная или групповая)
+        significant_columns = [col for col in df.columns if str(col).strip() and not str(col).startswith('Unnamed')]
+        quantity_cols = [col for col in significant_columns 
+                        if any(kw in str(col).lower() for kw in ['количество', 'кол-во', 'qty', 'quantity'])]
+        
+        is_group = len(quantity_cols) > 1 or len(significant_columns) > 4
+        
+        return {
+            'sheet_name': sheet_name,
+            'df': df,
+            'barcode_col': barcode_col,
+            'is_group': is_group,
+            'significant_columns': significant_columns,
+        }
+
+    def _on_import_shipment_finished(self, result):
+        """Обработка успешного импорта поставки из Google Sheets"""
+        self.hide_progress(f"Поставка '{result['sheet_name']}' импортирована", 3000)
+        self.logger.info(f"Импорт поставки из Google Sheets завершён: {result['sheet_name']}")
+        
+        # Передаём данные в shipment_operations для создания поставки
+        self.shipment_operations.create_shipment_from_google_sheets_data(result)
+
+    def _on_import_shipment_error(self, error_msg):
+        """Обработка ошибки импорта поставки из Google Sheets"""
+        self.hide_progress("Ошибка импорта", 3000)
+        self.logger.error(f"Ошибка импорта из Google Sheets: {error_msg}")
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.critical(self, "Ошибка", f"Ошибка импорта из Google Sheets:\n{error_msg}")
 
     def new_box(self):
         self.shipment_manager.new_box()

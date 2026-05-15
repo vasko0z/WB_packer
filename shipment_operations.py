@@ -142,6 +142,169 @@ class ShipmentOperations:
             # Сбрасываем флаг после завершения операции
             self._creating_shipment_in_progress = False
     
+    def create_shipment_from_google_sheets_data(self, result):
+        """Создание поставки из данных Google Sheets"""
+        df = result['df']
+        barcode_col = result['barcode_col']
+        is_group = result['is_group']
+        sheet_name = result['sheet_name']
+        
+        if is_group:
+            self._create_group_shipment_from_df(df, barcode_col, sheet_name)
+        else:
+            self._create_regular_shipment_from_df(df, barcode_col, sheet_name)
+    
+    def _create_regular_shipment_from_df(self, df, barcode_col, destination):
+        """Создание обычной поставки из DataFrame"""
+        # Определяем колонку артикула
+        sku_col = None
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if 'артикул' in col_lower or 'арт' in col_lower or 'sku' in col_lower:
+                sku_col = col
+                break
+        
+        # Определяем колонку количества
+        quantity_col = None
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if 'количество' in col_lower or 'кол-во' in col_lower or 'qty' in col_lower:
+                quantity_col = col
+                break
+        
+        if quantity_col is None and len(df.columns) > 2:
+            quantity_col = df.columns[2]
+        
+        # Обрезаем название если слишком длинное
+        if len(destination) > 50:
+            destination = destination[:50] + "..."
+        if not destination:
+            destination = "Новая поставка"
+        
+        # Проверяем уникальность имени
+        base_destination = destination
+        counter = 1
+        while destination in self.main_window.shipments:
+            destination = f"{base_destination} ({counter})"
+            counter += 1
+        
+        shipment = Shipment(destination, self.main_window.font_size, self.main_window.label_font_size, self.main_window.current_theme)
+        shipment.original_destination_name = destination
+        
+        for _, row in df.iterrows():
+            barcode = str(row[barcode_col]).strip() if barcode_col in df.columns and pd.notna(row.get(barcode_col)) else None
+            if not barcode or barcode.lower() in ['nan', 'none', '']:
+                continue
+            
+            sku = ""
+            if sku_col and sku_col in df.columns and pd.notna(row.get(sku_col)):
+                sku = str(row[sku_col]).strip()
+            
+            qty = 1
+            if quantity_col and quantity_col in df.columns and pd.notna(row.get(quantity_col)):
+                try:
+                    qty = int(float(row[quantity_col]))
+                except (ValueError, TypeError):
+                    qty = 1
+            
+            shipment.add_shipment_item(barcode, sku if sku else barcode, qty)
+        
+        if shipment.shipment_items:
+            self.main_window.shipment_manager.save_shipment(shipment)
+            self.main_window.shipments[destination] = shipment
+            self.main_window.current_shipment = shipment
+            self.main_window.current_shipment.current_box_index = -1
+            self.main_window.ui_updater.update_ui()
+            self.main_window.show_status(f"Поставка '{destination}' создана", 3000)
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self.main_window, "Предупреждение", "Не удалось импортировать товары из листа")
+    
+    def _create_group_shipment_from_df(self, df, barcode_col, group_name):
+        """Создание групповой поставки из DataFrame"""
+        from models import GroupShipment
+        
+        # Определяем колонки с количеством (колонки поставок)
+        quantity_cols = []
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if any(kw in col_lower for kw in ['количество', 'кол-во', 'qty', 'quantity']):
+                quantity_cols.append(col)
+        
+        if not quantity_cols:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self.main_window, "Предупреждение", "Не найдены колонки с количеством")
+            return
+        
+        # Определяем колонку артикула
+        sku_col = None
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if 'артикул' in col_lower or 'арт' in col_lower or 'sku' in col_lower:
+                sku_col = col
+                break
+        
+        # Обрезаем название группы
+        if len(group_name) > 50:
+            group_name = group_name[:50] + "..."
+        if not group_name:
+            group_name = "Групповая поставка"
+        
+        # Проверяем уникальность имени группы
+        base_group_name = group_name
+        counter = 1
+        while group_name in self.main_window.group_shipments:
+            group_name = f"{base_group_name} ({counter})"
+            counter += 1
+        
+        group_shipment = GroupShipment(group_name, self.main_window.font_size, self.main_window.label_font_size, self.main_window.current_theme)
+        
+        # Создаём подпоставки для каждой колонки количества
+        for qty_col in quantity_cols:
+            # Название подпоставки = название колонки количества
+            sub_name = str(qty_col).strip()
+            if len(sub_name) > 50:
+                sub_name = sub_name[:50] + "..."
+            if not sub_name:
+                sub_name = f"Поставка {quantity_cols.index(qty_col) + 1}"
+            
+            sub_destination = f"{group_name}::{sub_name}"
+            
+            shipment = Shipment(sub_destination, self.main_window.font_size, self.main_window.label_font_size, self.main_window.current_theme)
+            shipment.original_destination_name = sub_destination
+            shipment.display_name = sub_name
+            
+            for _, row in df.iterrows():
+                barcode = str(row[barcode_col]).strip() if barcode_col in df.columns and pd.notna(row.get(barcode_col)) else None
+                if not barcode or barcode.lower() in ['nan', 'none', '']:
+                    continue
+                
+                qty = 1
+                if pd.notna(row.get(qty_col)):
+                    try:
+                        qty = int(float(row[qty_col]))
+                    except (ValueError, TypeError):
+                        qty = 1
+                
+                sku = ""
+                if sku_col and sku_col in df.columns and pd.notna(row.get(sku_col)):
+                    sku = str(row[sku_col]).strip()
+                
+                shipment.add_shipment_item(barcode, sku if sku else barcode, qty)
+            
+            if shipment.shipment_items:
+                group_shipment.add_sub_shipment(sub_destination, shipment)
+        
+        if group_shipment.sub_shipments:
+            self.main_window.group_shipments[group_name] = group_shipment
+            self.main_window.shipment_manager.save_shipment(group_shipment)
+            self.main_window.current_shipment = None
+            self.main_window.ui_updater.update_ui()
+            self.main_window.show_status(f"Групповая поставка '{group_name}' создана", 3000)
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self.main_window, "Предупреждение", "Не удалось импортировать товары из листа")
+    
     def _process_as_regular_shipment(self, file_path, df, barcode_col=None, sku_col=None, quantity_col=None):
         """Обработка файла как обычной поставки"""
         file_name = Path(file_path).stem

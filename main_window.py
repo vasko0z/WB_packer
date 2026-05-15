@@ -3329,25 +3329,17 @@ class MainWindow(QMainWindow):
            logger.error(f"Ошибка при открытии диалога печати этикеток: {e}", exc_info=True)
 
     def update_sku_table_async(self):
-        """Асинхронное обновление таблицы SKU через async_manager"""
-        import os
-        sku_path = "SKU/SKU.xlsx"
-        
-        if not os.path.exists(sku_path):
-            self.logger.warning(f"Файл SKU {sku_path} не найден, пропускаем обновление")
-            return
-        
+        """Асинхронное обновление таблицы SKU из Google Sheets"""
         self.show_busy_progress("Обновление таблицы SKU...")
-        self.logger.info("Запуск асинхронного обновления таблицы SKU")
+        self.logger.info("Запуск асинхронного обновления таблицы SKU из Google Sheets")
         
         self.async_manager.execute_async(
             self._update_sku_table_worker,
             callback=self._on_sku_update_finished,
-            error_callback=self._on_sku_update_error,
-            sku_path=sku_path
+            error_callback=self._on_sku_update_error
         )
 
-    def _update_sku_table_worker(self, sku_path):
+    def _update_sku_table_worker(self):
         """Worker для обновления SKU в фоновом потоке из Google Sheets"""
         import os
         from database import execute_query

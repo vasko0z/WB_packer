@@ -1270,9 +1270,6 @@ class MainWindow(QMainWindow):
 
             if getattr(self, 'initialization_complete', False) and not getattr(self, '_loading_settings', False):
                 self.save_user_settings()
-
-            from PyQt6.QtWidgets import QApplication
-            QApplication.processEvents()
         except Exception as e:
             self.logger.error(f"Ошибка при переключении столбца 'Имя': {e}", exc_info=True)
 
@@ -1288,9 +1285,6 @@ class MainWindow(QMainWindow):
 
             if getattr(self, 'initialization_complete', False) and not getattr(self, '_loading_settings', False):
                 self.save_user_settings()
-
-            from PyQt6.QtWidgets import QApplication
-            QApplication.processEvents()
         except Exception as e:
             self.logger.error(f"Ошибка при переключении столбца 'Всего': {e}", exc_info=True)
             
@@ -1309,9 +1303,6 @@ class MainWindow(QMainWindow):
             self.logger.debug(f"toggle_article_column: init={init_complete}, loading={loading}, save={init_complete and not loading}, article={self.article_column_visible}")
             if init_complete and not loading:
                 self.save_user_settings()
-
-            from PyQt6.QtWidgets import QApplication
-            QApplication.processEvents()
         except Exception as e:
             self.logger.error(f"Ошибка при переключении столбца 'Артикул': {e}", exc_info=True)
             
@@ -1322,64 +1313,29 @@ class MainWindow(QMainWindow):
             self.stock_column_visible = is_visible
             self.shipment_table.setColumnHidden(ColumnIndex.STOCK_QTY, not is_visible)
 
-            self.logger.info(f"toggle_stock_column: is_visible={is_visible}, initialization_complete={getattr(self, 'initialization_complete', False)}, _loading_settings={getattr(self, '_loading_settings', False)}")
+            if is_visible and self.shipment_table.columnWidth(ColumnIndex.STOCK_QTY) == 0:
+                self.shipment_table.setColumnWidth(ColumnIndex.STOCK_QTY, 100)
 
-            if not is_visible:
-                # Статус скрыт, сообщения не отображаются
-                # self.statusBar().showMessage("Столбец 'На складе' скрыт", 2000)
-                pass
-            else:
-                # Статус скрыт, сообщения не отображаются
-                # self.statusBar().showMessage("Столбец 'На складе' показан", 2000)
-                pass
-
-            # Если столбец показывается, убедимся, что у него есть ширина
-            if is_visible and self.shipment_table.columnWidth(5) == 0:
-                self.shipment_table.setColumnWidth(5, 100)  # Ширина по умолчанию
-
-            # Сохраняем настройки пользователя (только если инициализация завершена и не идёт загрузка)
             if getattr(self, 'initialization_complete', False) and not getattr(self, '_loading_settings', False):
-                self.logger.info("toggle_stock_column: вызов save_user_settings()")
                 self.save_user_settings()
-            else:
-                self.logger.warning("toggle_stock_column: save_user_settings() пропущен")
-
-            # Обновляем UI для немедленного отображения изменений
-            from PyQt6.QtWidgets import QApplication
-            QApplication.processEvents()
         except Exception as e:
             self.logger.error(f"Ошибка при переключении столбца 'На складе': {e}", exc_info=True)
 
     def toggle_hide_completed_rows(self, state):
-        """Упра��ление ��к��ытием ��олностью собранных строк (где 'Осталось' = 0) в таблице поставки"""
+        """Управление скрытием полностью собранных строк (где 'Осталось' = 0) в таблице поставки"""
         try:
-            # state может быть int (для stateChanged) или Qt.CheckState (для toggled)
-            # Для stateChanged сигнал передаёт int значение
-            hide_completed = bool(state)  # Преобразуем в boolean
-
-            self.logger.info(f"toggle_hide_completed_rows: hide_completed={hide_completed}, initialization_complete={getattr(self, 'initialization_complete', False)}, _loading_settings={getattr(self, '_loading_settings', False)}")
+            hide_completed = bool(state)
 
             if hasattr(self, 'current_shipment') and self.current_shipment:
-                # Обновляем настройку в текущей поставке
                 self.current_shipment.hide_completed_items = hide_completed
 
-            # Сохраняем настройку в переменную экземпляра для последующего сохранения
             self.hide_completed_items_setting = hide_completed
 
-            # Сохраняем настройки Пользователя (только если инициализация завершена и не идёт загрузка)
             if getattr(self, 'initialization_complete', False) and not getattr(self, '_loading_settings', False):
-                self.logger.info("toggle_hide_completed_rows: вызов save_user_settings()")
                 self.save_user_settings()
-            else:
-                self.logger.warning("toggle_hide_completed_rows: save_user_settings() пропущен")
 
-            # Обновляем таблицу для применения скрытия строк
             if hasattr(self, 'ui_updater') and self.ui_updater:
                 self.ui_updater.update_shipment_table_rows_visibility()
-
-            # Обновляем UI для немедленного отображения изменений
-            from PyQt6.QtWidgets import QApplication
-            QApplication.processEvents()
         except Exception as e:
             self.logger.error(f"Ошибка при переключении скрытия собранных строк: {e}", exc_info=True)
 

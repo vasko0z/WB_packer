@@ -198,9 +198,6 @@ class MainWindow(QMainWindow):
             # Это гарантирует, что дерево поставок будет заполнено данными
             self.load_all_data()
 
-            # Автоматически обновляем таблицу SKU при старте
-            QTimer.singleShot(1000, self.update_sku_table_async)
-
             # Теперь применяем настройки темы и UI ПОСЛЕ загрузки данных
             # Это обеспечит корректное отображение с правильной темой
             self.apply_settings()
@@ -3421,6 +3418,10 @@ class MainWindow(QMainWindow):
             if barcode in pdf_barcodes:
                 records_with_labels += 1
         
+        # Сбрасываем кэш наименований чтобы UI подхватил новые данные
+        from database import clear_product_names_cache
+        clear_product_names_cache()
+        
         return {
             'records_with_labels': records_with_labels,
             'missing_barcodes_count': len(missing_barcodes),
@@ -3430,6 +3431,9 @@ class MainWindow(QMainWindow):
         """Обработка успешного обновления SKU"""
         self.hide_progress(f"SKU обновлено: {result['records_with_labels']} с этикетками", 3000)
         self.logger.info(f"Таблица SKU обновлена: {result['records_with_labels']} записей с этикетками, {result['missing_barcodes_count']} новых")
+        # Обновляем UI чтобы подхватить новые имена из SKU
+        if self.current_shipment and self.ui_updater:
+            self.ui_updater.update_shipment_table()
 
     def _on_sku_update_error(self, error_msg):
         """Обработка ошибки обновления SKU"""

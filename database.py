@@ -14,6 +14,12 @@ _product_names_cache: Dict[str, str] = {}
 _product_names_cache_ttl: Dict[str, float] = {}
 _PRODUCT_NAMES_CACHE_SECONDS = 60
 
+def clear_product_names_cache() -> None:
+    """Очищает кэш наименований товаров (вызывается после обновления SKU)"""
+    global _product_names_cache, _product_names_cache_ttl
+    _product_names_cache.clear()
+    _product_names_cache_ttl.clear()
+
 def get_product_names_by_barcodes(barcodes: List[str]) -> Dict[str, str]:
    """
    Получает наименования товаров по списку штрихкодов из PostgreSQL

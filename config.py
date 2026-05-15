@@ -14,10 +14,11 @@ DATABASE_TYPE = "postgresql"
 # Параметры для PostgreSQL
 # По умолчанию используется автоматическое обнаружение сервера
 # Если автообнаружение не работает, можно указать адрес вручную
-POSTGRESQL_HOST = "89.169.3.41"  # Будет определен автоматически или загружен из db_config.json
-POSTGRESQL_PORT = 5432         # Default PostgreSQL port
-POSTGRESQL_DATABASE = "wb_packer"
-POSTGRESQL_USER = "wb_packer_user"
+# Адрес сервера загружается из переменной окружения WB_PACKER_DB_HOST
+POSTGRESQL_HOST = os.environ.get("WB_PACKER_DB_HOST", "")
+POSTGRESQL_PORT = int(os.environ.get("WB_PACKER_DB_PORT", "5432"))
+POSTGRESQL_DATABASE = os.environ.get("WB_PACKER_DB_NAME", "wb_packer")
+POSTGRESQL_USER = os.environ.get("WB_PACKER_DB_USER", "wb_packer_user")
 # Пароль загружается ТОЛЬКО из переменной окружения или файла настроек
 # Никогда не храните пароль в коде!
 POSTGRESQL_PASSWORD = os.environ.get("WB_PACKER_DB_PASSWORD", "")
@@ -47,8 +48,6 @@ def get_postgresql_host():
             password=POSTGRESQL_PASSWORD
         )
 
-        # discover() автоматически проверяет сохраненный адрес из db_config.json
-        # и только при неудаче сканирует сеть
         discovered_host = discovery.discover()
 
         if discovered_host:
@@ -56,18 +55,12 @@ def get_postgresql_host():
             logger.info(f"PostgreSQL сервер найден: {discovered_host}")
             return discovered_host
         else:
-            # Fallback на дефолтный адрес
-            default_host = "89.169.3.41"
-            logger.warning(f"Автопоиск не удался, используется адрес по умолчанию: {default_host}")
-            POSTGRESQL_HOST = default_host
-            return default_host
+            logger.warning("Автопоиск PostgreSQL сервера не удался")
+            return ""
 
     except Exception as e:
         logger.error(f"Ошибка при определении адреса PostgreSQL: {e}")
-        # Fallback на дефолтный адрес
-        default_host = "89.169.3.41"
-        POSTGRESQL_HOST = default_host
-        return default_host
+        return ""
 
 # Таймаут для подключения к базе данных (в секундах)
 DATABASE_TIMEOUT = 15  # Уменьшен для более быстрого отклика при ошибках

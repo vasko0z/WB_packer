@@ -2,6 +2,7 @@
 import json
 import logging
 from pathlib import Path
+from typing import Dict, List, Optional, Any, Tuple
 import config  # Добавляем импорт config
 from db_connection import execute_query, execute_many, get_connection, _release_connection, get_db_type
 # PostgreSQL is the only supported database
@@ -9,11 +10,11 @@ from db_connection import execute_query, execute_many, get_connection, _release_
 logger = logging.getLogger(__name__)
 
 
-_product_names_cache = {}
-_product_names_cache_ttl = {}
+_product_names_cache: Dict[str, str] = {}
+_product_names_cache_ttl: Dict[str, float] = {}
 _PRODUCT_NAMES_CACHE_SECONDS = 60
 
-def get_product_names_by_barcodes(barcodes):
+def get_product_names_by_barcodes(barcodes: List[str]) -> Dict[str, str]:
    """
    Получает наименования товаров по списку штрихкодов из PostgreSQL
    Возвращает словарь {штрихкод: наименование}
@@ -122,11 +123,11 @@ def get_product_names_by_barcodes(barcodes):
        return {}
 
 
-_stock_qty_cache = {}
-_stock_qty_cache_ttl = {}
+_stock_qty_cache: Dict[str, Optional[int]] = {}
+_stock_qty_cache_ttl: Dict[str, float] = {}
 _STOCK_QTY_CACHE_SECONDS = 60
 
-def get_stock_cache(barcode):
+def get_stock_cache(barcode: str) -> Optional[int]:
     """Получает кэшированное количество остатков для штрихкода (с локальным кэшем)"""
     global _stock_qty_cache, _stock_qty_cache_ttl
     import time
@@ -149,7 +150,7 @@ def get_stock_cache(barcode):
         return None
 
 
-def set_stock_cache(barcode, quantity):
+def set_stock_cache(barcode: str, quantity: Optional[int]) -> None:
    """Обновляет кэшированное количество остатков для штрихкода"""
    try:
        db_type = get_db_type()
@@ -1709,7 +1710,7 @@ def get_archived_shipments():
         logger.error(f"Ошибка получения архивированных поставок: {e}", exc_info=True)
         return []
 
-def archive_shipment(shipment_name, username):
+def archive_shipment(shipment_name: str, username: str) -> bool:
     """Архивировать поставку"""
     try:
         from datetime import datetime
@@ -2098,7 +2099,7 @@ def remove_avatar_column():
 # Функции для атомарного обновления и блокировок (защита от конфликтов)
 # =============================================================================
 
-def atomic_increment_allocated_qty(shipment_id, barcode, increment=1):
+def atomic_increment_allocated_qty(shipment_id: int, barcode: str, increment: int = 1) -> Tuple[bool, Optional[int], str]:
     """
     Атомарно увеличивает allocated_qty для товара в поставке.
     Использует UPDATE с условием для предотвращения гонки данных.
@@ -2149,7 +2150,7 @@ def atomic_increment_allocated_qty(shipment_id, barcode, increment=1):
         return (False, None, str(e))
 
 
-def atomic_decrement_allocated_qty(shipment_id, barcode, decrement=1):
+def atomic_decrement_allocated_qty(shipment_id: int, barcode: str, decrement: int = 1) -> Tuple[bool, Optional[int], str]:
     """
     Атомарно уменьшает allocated_qty для товара в поставке.
     

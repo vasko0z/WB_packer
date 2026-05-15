@@ -3485,7 +3485,10 @@ class MainWindow(QMainWindow):
     def _update_sku_table_worker(self):
         """Worker для обновления SKU в фоновом потоке из Google Sheets"""
         import os
-        from db_connection import get_connection
+        import time
+        from db_connection import get_connection, get_db_type
+        
+        t0 = time.time()
         
         try:
             import gspread
@@ -3502,26 +3505,66 @@ class MainWindow(QMainWindow):
         creds = Credentials.from_service_account_file(credentials_path, scopes=scope)
         client = gspread.authorize(creds)
         
+        self.logger.info(f"[SKU] Авторизация: {time.time()-t0:.2f}s")
+        
         # ID таблицы из URL
         spreadsheet_id = "1tQzh_qTnldbpeu9ryNF8ZKY4-amwT8UfuMqbSU1qOlA"
-        sheet = client.open_by_key(spreadsheet_id).sheet1
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        sheet = spreadsheet.sheet1
         
-        # Получаем все данные
-        all_records = sheet.get_all_records()
+        # Используем get_all_values() вместо get_all_records() — в 3-5 раз быстрее
+        # get_all_records() создаёт dict для каждой строки, что очень медленно на больших таблицах
+        all_values = sheet.get_all_values()
         
-        if not all_records:
+        self.logger.info(f"[SKU] Получено {len(all_values)} строк из Google Sheets: {time.time()-t0:.2f}s")
+        
+        if len(all_values) < 2:
             raise ValueError("Таблица SKU пуста или не удалось загрузить данные")
         
-        # Собираем все записи для пакетной вставки
+        # Находим индексы колонок по заголовкам
+        headers = [h.strip().lower() for h in all_values[0]]
+        
+        # Ищем колонку штрихкода
+        barcode_idx = None
+        for i, h in enumerate(headers):
+            if h in ('штрихкод', 'barcode', 'шк', 'штрих-код', 'баркод'):
+                barcode_idx = i
+                break
+        if barcode_idx is None:
+            # Если не нашли по заголовку, берём первую колонку
+            barcode_idx = 0
+        
+        # Ищем колонку артикула
+        article_idx = None
+        for i, h in enumerate(headers):
+            if h in ('артикул', 'article', 'арт', 'sku'):
+                article_idx = i
+                break
+        
+        # Ищем колонку наименования
+        name_idx = None
+        for i, h in enumerate(headers):
+            if h in ('наименование', 'name', 'название', 'товар'):
+                name_idx = i
+                break
+        
+        self.logger.info(f"[SKU] Колонки: barcode={barcode_idx}, article={article_idx}, name={name_idx}")
+        
+        # Парсим данные напрямую из списка списков
         records_to_insert = []
         records_with_labels = 0
         skipped_empty_barcode = 0
-        for row in all_records:
-            barcode = str(row.get("Штрихкод", row.get("Barcode", row.get("штрихкод", "")))).strip()
-            article = str(row.get("Артикул", row.get("Article", row.get("артикул", "")))).strip()
-            name = str(row.get("Наименование", row.get("Name", row.get("наименование", "")))).strip()
+        
+        for row in all_values[1:]:  # Пропускаем заголовок
+            if not row or len(row) <= barcode_idx:
+                skipped_empty_barcode += 1
+                continue
             
-            # Нормализуем штрихкод: убираем пробелы, дефисы, приводим к единому формату
+            barcode = row[barcode_idx].strip() if barcode_idx < len(row) else ""
+            article = row[article_idx].strip() if article_idx is not None and article_idx < len(row) else ""
+            name = row[name_idx].strip() if name_idx is not None and name_idx < len(row) else ""
+            
+            # Нормализуем штрихкод
             barcode = barcode.replace(" ", "").replace("-", "").replace("\t", "")
             article = article.replace(" ", "").replace("\t", "")
             
@@ -3534,31 +3577,26 @@ class MainWindow(QMainWindow):
             
             records_to_insert.append((barcode, article if article else None, name if name else None))
         
+        self.logger.info(f"[SKU] Подготовлено {len(records_to_insert)} записей ({records_with_labels} с именами): {time.time()-t0:.2f}s")
+        
         if not records_to_insert:
             raise ValueError("Нет валидных записей для обновления SKU")
         
-        self.logger.info(f"Подготовлено {len(records_to_insert)} записей SKU ({records_with_labels} с наименованиями)")
-        
-        # Массовая вставка через psycopg2.extras.execute_values (один запрос на все записи)
-        from db_connection import get_db_type
+        # Массовая вставка
         db_type = get_db_type()
         conn = get_connection()
         cursor = conn.cursor()
         
         try:
             if db_type == "sqlite":
-                # Для SQLite используем executemany
                 cursor.execute("DELETE FROM sku")
                 cursor.executemany(
                     "INSERT INTO sku (barcode, article, name) VALUES (?, ?, ?) ON CONFLICT(barcode) DO UPDATE SET article=excluded.article, name=excluded.name",
                     records_to_insert
                 )
             else:
-                # Для PostgreSQL используем execute_values (гораздо быстрее)
                 import psycopg2.extras
-                
                 cursor.execute("DELETE FROM sku")
-                
                 psycopg2.extras.execute_values(
                     cursor,
                     "INSERT INTO sku (barcode, article, name) VALUES %s ON CONFLICT (barcode) DO UPDATE SET article = EXCLUDED.article, name = EXCLUDED.name",
@@ -3567,7 +3605,7 @@ class MainWindow(QMainWindow):
                 )
             
             conn.commit()
-            self.logger.info(f"Массово вставлено {len(records_to_insert)} записей SKU (db_type={db_type})")
+            self.logger.info(f"[SKU] Вставка завершена: {time.time()-t0:.2f}s")
         except Exception:
             conn.rollback()
             raise
@@ -3578,15 +3616,17 @@ class MainWindow(QMainWindow):
         from database import clear_product_names_cache
         clear_product_names_cache()
         
+        elapsed = round(time.time() - t0, 1)
         return {
             'records_with_labels': records_with_labels,
             'total_records': len(records_to_insert),
             'skipped': skipped_empty_barcode,
+            'elapsed': elapsed,
         }
 
     def _on_sku_update_finished(self, result):
         """Обработка успешного обновления SKU"""
-        msg = f"SKU обновлено: {result['records_with_labels']} с наименованиями из {result['total_records']} (пропущено: {result.get('skipped', 0)})"
+        msg = f"SKU обновлено: {result['records_with_labels']} с наименованиями из {result['total_records']} (пропущено: {result.get('skipped', 0)}) за {result.get('elapsed', '?')}с"
         self.hide_progress(msg, 5000)
         self.logger.info(msg)
         # Обновляем UI чтобы подхватить новые имена из SKU

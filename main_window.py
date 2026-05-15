@@ -2030,6 +2030,10 @@ class MainWindow(QMainWindow):
 
             self.show_status("Данные загружены", 2000)
             self.logger.info("Загрузка всех данных завершена")
+
+            # Обновляем UI с загруженными данными
+            if self.ui_updater is not None:
+                self.ui_updater.update_ui()
         except Exception as e:
             self.logger.error(f"Ошибка при обработке загруженных данных: {e}", exc_info=True)
             QMessageBox.warning(self, "Ошибка", f"Не удалось обработать данные: {e}")
@@ -3235,10 +3239,8 @@ class MainWindow(QMainWindow):
 
                 self.shipment_table.verticalScrollBar().setValue(vertical_scroll_pos)
                 self.shipment_table.horizontalScrollBar().setValue(horizontal_scroll_pos)
-                QApplication.processEvents()
                 self.restore_table_columns_width()
                 self.shipment_table.updateGeometry()
-                QApplication.processEvents()
             elif self.current_shipment is None:
                 for group_name, group_shipment in self.group_shipments.items():
                     if self.shipments_tree_widget.currentItem():

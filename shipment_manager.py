@@ -4,7 +4,7 @@ import pandas as pd
 import logging
 from pathlib import Path
 from PyQt6.QtWidgets import QMessageBox, QFileDialog, QDialog, QMenu
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 import database
 import config
 import utils
@@ -710,7 +710,7 @@ class ShipmentManager:
         self.main_window.scan_input.setFocus()
 
     def _process_scan(self):
-        """Внутренний метод для обработки сканирования"""
+        """Внутренний метод для обработки сканирования (асинхронный)"""
         barcode = self.main_window.scan_input.text().strip()
         if not barcode:
             return
@@ -748,17 +748,68 @@ class ShipmentManager:
             self._reset_scanning_flag()
             return
 
-        # Получаем ID поставки и текущего пользователя
+        # Запускаем асинхронную обработку сканирования
+        self.main_window.async_manager.execute_async(
+            self._scan_db_operations,
+            callback=self._on_scan_db_operations_finished,
+            error_callback=self._on_scan_db_operations_error,
+            barcode=barcode,
+            shipment_item=shipment_item,
+            current_box=current_box,
+        )
+
+    def _scan_db_operations(self, barcode, shipment_item, current_box):
+        """Выполняет DB-операции сканирования в фоновом потоке"""
+        from database import atomic_increment_allocated_qty
+        from lock_manager import is_item_locked_by_other
+
         shipment_id = getattr(self.main_window.current_shipment, 'shipment_id', None)
         current_user = getattr(self.main_window, 'current_user', 'unknown')
 
-        # Проверяем, не заблокирован ли товар другим пользователем
-        if shipment_id is not None:
-            from lock_manager import is_item_locked_by_other, try_lock_item, release_item_lock
+        # Проверяем блокировку
+        if shipment_id is not None and is_item_locked_by_other(barcode, shipment_id, current_user):
+            lock_info = self._get_lock_manager().get_lock_info(barcode, shipment_id)
+            return {
+                'success': False,
+                'error': 'locked',
+                'lock_info': lock_info,
+                'barcode': barcode,
+            }
 
-            if is_item_locked_by_other(barcode, shipment_id, current_user):
-                # Товар заблокирован другим пользователем
-                lock_info = self._get_lock_manager().get_lock_info(barcode, shipment_id)
+        # Атомарное обновление
+        if shipment_id is None:
+            return {
+                'success': False,
+                'error': 'no_shipment_id',
+                'barcode': barcode,
+            }
+
+        success, new_qty, message = atomic_increment_allocated_qty(shipment_id, barcode, 1)
+        if not success:
+            return {
+                'success': False,
+                'error': 'db_error',
+                'message': message,
+                'barcode': barcode,
+            }
+
+        return {
+            'success': True,
+            'new_qty': new_qty,
+            'barcode': barcode,
+            'shipment_id': shipment_id,
+        }
+
+    def _on_scan_db_operations_finished(self, result):
+        """Обработка результата DB-операций сканирования (главный поток)"""
+        barcode = result.get('barcode')
+        current_box = self.main_window.current_shipment.boxes[self.main_window.current_shipment.current_box_index]
+        shipment_item = self.main_window.current_shipment.shipment_items[barcode]
+
+        if not result['success']:
+            error = result.get('error')
+            if error == 'locked':
+                lock_info = result.get('lock_info')
                 if lock_info:
                     utils.play_sound(self.main_window.error_sound, self.main_window.tone_sound)
                     QMessageBox.warning(
@@ -766,80 +817,57 @@ class ShipmentManager:
                         f"Товар «{barcode}» заблокирован пользователем {lock_info.get('username', 'неизвестно')}!\n"
                         f"До окончания блокировки: {self._format_lock_time(lock_info.get('expires_at'))}"
                     )
+            elif error == 'no_shipment_id':
+                self.logger.warning("shipment_id не найден, используем неатомарное обновление")
+                if shipment_item.allocated_qty >= shipment_item.total_qty:
+                    utils.play_sound(self.main_window.error_sound, self.main_window.tone_sound)
+                    QMessageBox.warning(self.main_window, "Ошибка", f"Товар «{barcode}» уже полностью распределен!")
                     self.main_window.scan_input.selectAll()
                     self._reset_scanning_flag()
                     return
-
-        # Атомарно увеличиваем allocated_qty в БД для предотвращения конфликтов
-        from database import atomic_increment_allocated_qty, invalidate_cache_for_shipment
-
-        # Получаем ID поставки
-        if shipment_id is None:
-            # Если ID ещё нет, используем старое поведение (без атомарности)
-            self.logger.warning("shipment_id не найден, используем неатомарное обновление")
-            # Дополнительная проверка для неатомарного пути - проверяем ещё раз
-            if shipment_item.allocated_qty >= shipment_item.total_qty:
+                current_box.add_item(barcode)
+                shipment_item.allocated_qty += 1
+                self._finalize_scan(barcode, shipment_item, current_box)
+                return
+            else:
                 utils.play_sound(self.main_window.error_sound, self.main_window.tone_sound)
-                QMessageBox.warning(self.main_window, "Ошибка", f"Товар «{barcode}» уже полностью распределен!")
-                self.main_window.scan_input.selectAll()
-                self._reset_scanning_flag()
-                return
-            current_box.add_item(barcode)
-            shipment_item.allocated_qty += 1
-            
-            # Если это была последняя штука - особый звук
-            if shipment_item.allocated_qty >= shipment_item.total_qty:
-                utils.play_sound("ok_all.wav", False)
-                self.main_window.statusBar().showMessage(f"Добавлена последняя штука {barcode}", 2000)
-                self.main_window.scan_input.clear()
-                self.main_window.scan_input.setFocus()
-                self.is_scanning = False
-                return
-        else:
-            # Атомарное обновление через БД
-            success, new_qty, message = atomic_increment_allocated_qty(shipment_id, barcode, 1)
+                QMessageBox.warning(self.main_window, "Ошибка", f"Не удалось добавить товар: {result.get('message')}")
+            self.main_window.scan_input.selectAll()
+            self._reset_scanning_flag()
+            return
 
-            if not success:
-                # Не удалось увеличить - товар уже распределён или ошибка
-                utils.play_sound(self.main_window.error_sound, self.main_window.tone_sound)
-                QMessageBox.warning(self.main_window, "Ошибка", f"Не удалось добавить товар: {message}")
-                self.main_window.scan_input.selectAll()
-                self._reset_scanning_flag()
-                return
-
-            # Обновляем локальную модель
-            current_box.add_item(barcode)
-            shipment_item.allocated_qty = new_qty
-
-            # Запускаем инвалидацию кэша в фоне (не блокирует ввод)
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._invalidate_cache_async(shipment_id))
-
-        # Сбрасываем кэши в модели поставки при изменении распределения товаров
+        # Успех: обновляем локальную модель
+        current_box.add_item(barcode)
+        shipment_item.allocated_qty = result['new_qty']
         self.main_window.current_shipment.invalidate_caches()
 
-        # Очищаем поле ввода СРАЗУ для быстрого отклика
-        self.main_window.scan_input.clear()
+        # Инвалидация кэша в фоне
+        QTimer.singleShot(0, lambda: self._invalidate_cache_async(result['shipment_id']))
 
-        # Сбрасываем флаг сканирования и возвращаем фокус — поле готово к следующему товару
+        self._finalize_scan(barcode, shipment_item, current_box)
+
+    def _finalize_scan(self, barcode, shipment_item, current_box):
+        """Финализация сканирования: очистка поля, звук, обновление UI"""
+        self.main_window.scan_input.clear()
         self.is_scanning = False
         self.main_window.scan_input.setFocus()
 
-        # Воспроизводим звук СРАЗУ когда поле ввода готово к следующему сканированию
-        # Если это была последняя штука (allocated_qty == total_qty) - особый звук
         if shipment_item.allocated_qty >= shipment_item.total_qty:
-            utils.play_sound("ok_all.wav", False)  # Особый звук для последней штуки
+            utils.play_sound("ok_all.wav", False)
+            self.main_window.statusBar().showMessage(f"Добавлена последняя штука {barcode}", 2000)
         else:
             utils.play_sound(self.main_window.ok_sound, self.main_window.tone_sound)
+            self.main_window.statusBar().showMessage(f"Добавлен {barcode} в коробку {current_box.box_id}", 200)
 
-        # Минимальное обновление UI (только таблицу коробки)
         self.main_window.ui_updater.update_current_box_table()
-
-        # Короткое сообщение
-        self.main_window.statusBar().showMessage(f"Добавлен {barcode} в коробку {current_box.box_id}", 200)
-
-        # ОПТИМИЗАЦИЯ: Отложенное сохранение
         self.schedule_save()
+
+    def _on_scan_db_operations_error(self, error_msg):
+        """Обработка ошибки DB-операций сканирования"""
+        self.logger.error(f"Ошибка DB-операций сканирования: {error_msg}")
+        utils.play_sound(self.main_window.error_sound, self.main_window.tone_sound)
+        QMessageBox.warning(self.main_window, "Ошибка", f"Ошибка при обработке сканирования: {error_msg}")
+        self._reset_scanning_flag()
 
     def _get_lock_manager(self):
         """Получить экземпляр LockManager"""

@@ -3040,10 +3040,8 @@ class MainWindow(QMainWindow):
                 if self.data_controller.archive_shipment(shipment_name, self.current_user):
                     # Обновляем данные
                     self.load_all_data()
-                    # Дополнительно обновляем дерево ппоставккуавок для мгновенного отображения изменений
+                    # Дополнительно обновляем дерево поставок для мгновенного отображения изменений
                     self.ui_updater.update_shipments_tree()
-                    # Принудительно обновляем интерфейс для гарантии обновления
-                    QApplication.processEvents()
                     QMessageBox.information(self, "Успех", f"Поставка «{shipment_name}» отправлена в архив")
                 else:
                     QMessageBox.critical(self, "Ошибка", "Не удалось отправить поставку в архив")
@@ -3084,10 +3082,8 @@ class MainWindow(QMainWindow):
                     
                     # Обновляем данные
                     self.load_all_data()
-                    # Дополнительно обновляем дерево ппоставккуавок для мгновенного отображения изменений
+                    # Дополнительно обновляем дерево поставок для мгновенного отображения изменений
                     self.ui_updater.update_shipments_tree()
-                    # Принудительно обновляем интерфейс для гарантии обновления
-                    QApplication.processEvents()
                     QMessageBox.information(self, "Успех", f"Групповая поставка «{group_name}» отправлена в архив")
                 except Exception as e:
                     QMessageBox.critical(self, "Ошибка", f"Не удалось отправить групповую поставку в архив:\n{e}")

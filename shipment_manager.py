@@ -1164,19 +1164,11 @@ class ShipmentManager:
         if current_row >= 0 and current_column >= 0:
             self.main_window.shipment_table.setCurrentCell(current_row, current_column)
 
-        # Принудительно обновляем UI для немедленного отображения прогресса
-        from PyQt6.QtWidgets import QApplication
-        QApplication.processEvents()
-
         # Use longer message duration for better UX
         self.main_window.statusBar().showMessage(f"Добавлено {qty_to_add} шт. {barcode} в коробку {current_box.box_id}", 3000)
 
         # Немедленное сохранение поставки после добавления товара
         self.save_shipment_immediate()
-
-        # Дополнительно обновляем интерфейс, чтобы гарантировать, что строки и кнопки отражают актуальное состояние
-        from PyQt6.QtWidgets import QApplication
-        QApplication.processEvents()
 
     def add_all_remaining_for_all_items_to_box(self):
         """Добавить весь остаток всех товаров в текущую коробку
@@ -1224,10 +1216,6 @@ class ShipmentManager:
 
         # Обновляем только прогресс в дереве поставок (без полной перестройки)
         self.main_window.ui_updater._update_shipments_tree_progress()
-
-        # Принудительно обновляем UI для немедленного отображения прогресса
-        from PyQt6.QtWidgets import QApplication
-        QApplication.processEvents()
 
         # Показываем сообщение
         if items_added > 0:
@@ -2041,7 +2029,6 @@ class ShipmentManager:
             if (hasattr(self.main_window.current_shipment, 'parent_group') and
                 self.main_window.current_shipment.parent_group):
                 self.main_window.ui_updater.update_shipments_tree()
-                QApplication.processEvents()
 
             total_items = sum(len(items) for items in boxes_data.values())
             

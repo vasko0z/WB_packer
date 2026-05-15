@@ -264,10 +264,6 @@ class ShipmentController(Controller):
                 self.main_window.current_user):
                 from database import update_user_session
                 update_user_session(self.main_window.current_shipment.destination_name, self.main_window.current_user)
-            
-            # Принудительно обновляем интерфейс для гарантии отображения изменений
-            from PyQt6.QtWidgets import QApplication
-            QApplication.processEvents()
         except Exception as e:
             logger.error(f"Ошибка при обновлении данных: {e}", exc_info=True)
             from PyQt6.QtWidgets import QMessageBox

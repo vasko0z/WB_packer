@@ -622,10 +622,6 @@ class ShipmentOperations:
                     self.main_window.shipments_tree_widget.viewport().update()
                     self.main_window.shipments_tree_widget.updateGeometry()
                 
-                # Принудительно обновляем интерфейс для гарантии отображения изменений
-                from PyQt6.QtWidgets import QApplication
-                QApplication.processEvents()
-                
                 # Дополнительно принудительно обновляем дерево поставок для гарантии полного обновления
                 if hasattr(self.main_window, 'shipments_tree_widget'):
                     self.main_window.shipments_tree_widget.update()

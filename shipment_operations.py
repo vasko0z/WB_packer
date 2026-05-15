@@ -196,6 +196,9 @@ class ShipmentOperations:
             if not barcode or barcode.lower() in ['nan', 'none', '']:
                 continue
             
+            # Нормализуем штрихкод: убираем пробелы, дефисы, табуляции
+            barcode = barcode.replace(" ", "").replace("-", "").replace("\t", "")
+            
             sku = ""
             if sku_col and sku_col in df.columns and pd.notna(row.get(sku_col)):
                 sku = str(row[sku_col]).strip()
@@ -279,6 +282,9 @@ class ShipmentOperations:
                 if not barcode or barcode.lower() in ['nan', 'none', '']:
                     continue
                 
+                # Нормализуем штрихкод: убираем пробелы, дефисы, табуляции
+                barcode = barcode.replace(" ", "").replace("-", "").replace("\t", "")
+                
                 qty = 1
                 if pd.notna(row.get(qty_col)):
                     try:
@@ -336,6 +342,9 @@ class ShipmentOperations:
             
             if not barcode or barcode.lower() in ['nan', 'none', '']:
                 continue
+
+            # Нормализуем штрихкод: убираем пробелы, дефисы, табуляции
+            barcode = barcode.replace(" ", "").replace("-", "").replace("\t", "")
 
             # Используем определенную колонку для артикула или ставим пустую строку
             sku = ""

@@ -61,59 +61,59 @@ def get_product_names_by_barcodes(barcodes: List[str]) -> Dict[str, str]:
        db_type = get_db_type()
        
        if db_type == "sqlite":
-           placeholders = ','.join(['?'] * len(uncached_barcodes))
-           query = f"""
-               SELECT barcode, MIN(name) as name
-               FROM (
-                   SELECT barcode, name, 1 as priority
-                   FROM sku
-                   WHERE barcode IN ({placeholders})
-                   AND name IS NOT NULL
-                   AND name != ''
+            placeholders = ','.join(['?'] * len(uncached_barcodes))
+            query = f"""
+                SELECT barcode, MIN(name) as name
+                FROM (
+                    SELECT barcode, name, 1 as priority
+                    FROM sku
+                    WHERE REPLACE(REPLACE(REPLACE(barcode, ' ', ''), '-', ''), '	', '') IN ({placeholders})
+                    AND name IS NOT NULL
+                    AND name != ''
 
-                   UNION ALL
+                    UNION ALL
 
-                   SELECT si.barcode, si.sku as name, 2 as priority
-                   FROM shipment_items si
-                   WHERE si.barcode IN ({placeholders})
-                   AND si.sku IS NOT NULL
-                   AND si.sku != ''
-                   AND NOT EXISTS (
-                       SELECT 1 FROM sku s
-                       WHERE s.barcode = si.barcode
-                       AND s.name IS NOT NULL
-                       AND s.name != ''
-                   )
-               ) AS combined
-               GROUP BY barcode
-               ORDER BY barcode
-           """
+                    SELECT si.barcode, si.sku as name, 2 as priority
+                    FROM shipment_items si
+                    WHERE REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '	', '') IN ({placeholders})
+                    AND si.sku IS NOT NULL
+                    AND si.sku != ''
+                    AND NOT EXISTS (
+                        SELECT 1 FROM sku s
+                        WHERE REPLACE(REPLACE(REPLACE(s.barcode, ' ', ''), '-', ''), '	', '') = REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '	', '')
+                        AND s.name IS NOT NULL
+                        AND s.name != ''
+                    )
+                ) AS combined
+                GROUP BY barcode
+                ORDER BY barcode
+            """
        else:
            query = f"""
-               SELECT DISTINCT ON (barcode) barcode, name
-               FROM (
-                   SELECT barcode, name, 1 as priority
-                   FROM sku
-                   WHERE barcode IN ({placeholders})
-                   AND name IS NOT NULL
-                   AND name != ''
+                SELECT DISTINCT ON (barcode) barcode, name
+                FROM (
+                    SELECT barcode, name, 1 as priority
+                    FROM sku
+                    WHERE REPLACE(REPLACE(REPLACE(barcode, ' ', ''), '-', ''), '\t', '') IN ({placeholders})
+                    AND name IS NOT NULL
+                    AND name != ''
 
-                   UNION ALL
+                    UNION ALL
 
-                   SELECT si.barcode, si.sku as name, 2 as priority
-                   FROM shipment_items si
-                   WHERE si.barcode IN ({placeholders})
-                   AND si.sku IS NOT NULL
-                   AND si.sku != ''
-                   AND NOT EXISTS (
-                       SELECT 1 FROM sku s
-                       WHERE s.barcode = si.barcode
-                       AND s.name IS NOT NULL
-                       AND s.name != ''
-                   )
-               ) AS combined
-               ORDER BY barcode, priority
-           """
+                    SELECT si.barcode, si.sku as name, 2 as priority
+                    FROM shipment_items si
+                    WHERE REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '\t', '') IN ({placeholders})
+                    AND si.sku IS NOT NULL
+                    AND si.sku != ''
+                    AND NOT EXISTS (
+                        SELECT 1 FROM sku s
+                        WHERE REPLACE(REPLACE(REPLACE(s.barcode, ' ', ''), '-', ''), '\t', '') = REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '\t', '')
+                        AND s.name IS NOT NULL
+                        AND s.name != ''
+                    )
+                ) AS combined
+                ORDER BY barcode, priority
+            """
 
        results = execute_query(query, uncached_barcodes * 2, fetchall=True)
 

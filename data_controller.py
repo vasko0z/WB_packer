@@ -96,20 +96,6 @@ class DataController:
                     # Если есть parent_group, но нет ::, используем destination_name как display_name
                     shipment.display_name = destination_name
 
-                # Загрузка товаров поставки
-                shipment_items = self.load_shipment_items(shipment_id_value)
-                shipment.shipment_items = shipment_items
-
-                # Загрузка коробок и товаров в коробках
-                boxes_data = self.load_boxes_data(shipment_id_value)
-                self.load_boxes_and_items(shipment, boxes_data)
-
-                # Сбрасываем кэш после загрузки данных
-                shipment.invalidate_caches()
-
-                # Загрузка активных пользователей для этой поставки
-                # Блокировка поставок удалена, поэтому пропускаем эту часть
-
                 if parent_group:
                     if parent_group not in group_shipments:
                         from models import GroupShipment
@@ -120,6 +106,17 @@ class DataController:
                 else:
                     shipments[destination_name] = shipment
 
+            # Оптимизация: batch загрузка всех товаров и коробок одним запросом
+            self._batch_load_shipment_items(shipments, group_shipments)
+            self._batch_load_boxes(shipments, group_shipments)
+
+            # Сбрасываем кэши после загрузки данных
+            for shipment in shipments.values():
+                shipment.invalidate_caches()
+            for group in group_shipments.values():
+                for sub in group.sub_shipments.values():
+                    sub.invalidate_caches()
+
             logger.info(f"Загрузка завершена: {len(shipments)} обычных поставок, {len(group_shipments)} групповых поставок")
 
             return {
@@ -129,6 +126,100 @@ class DataController:
         except Exception as e:
             logger.error(f"Ошибка при загрузке поставок из базы данных: {e}", exc_info=True)
             return {'shipments': {}, 'group_shipments': {}}
+
+    def _get_all_shipments(self, shipments, group_shipments):
+        """Возвращает dict всех поставок (обычных + подпоставки групп)"""
+        all_shipments = dict(shipments)
+        for group in group_shipments.values():
+            all_shipments.update(group.sub_shipments)
+        return all_shipments
+
+    def _batch_load_shipment_items(self, shipments, group_shipments):
+        """Batch загрузка всех товаров поставок одним запросом"""
+        all_shipments = self._get_all_shipments(shipments, group_shipments)
+        shipment_ids = [s.shipment_id for s in all_shipments.values() if hasattr(s, 'shipment_id') and s.shipment_id]
+        
+        if not shipment_ids:
+            return
+        
+        db_type = get_db_type()
+        placeholder = "?" if db_type == "sqlite" else "%s"
+        placeholders = ", ".join([placeholder] * len(shipment_ids))
+        
+        from database import execute_query
+        from models import ShipmentItem
+        
+        items_data = execute_query(
+            f"SELECT shipment_id, barcode, sku, total_qty, allocated_qty FROM shipment_items WHERE shipment_id IN ({placeholders})",
+            tuple(shipment_ids),
+            fetchall=True
+        )
+        
+        # Создаём мапу shipment_id -> shipment
+        id_to_shipment = {}
+        for s in all_shipments.values():
+            if hasattr(s, 'shipment_id'):
+                id_to_shipment[s.shipment_id] = s
+        
+        for row in items_data:
+            sid, barcode, sku, total_qty, allocated_qty = row
+            if sid in id_to_shipment:
+                id_to_shipment[sid].shipment_items[barcode] = ShipmentItem(barcode, sku, total_qty, allocated_qty)
+
+    def _batch_load_boxes(self, shipments, group_shipments):
+        """Batch загрузка всех коробок и их содержимого двумя запросами"""
+        all_shipments = self._get_all_shipments(shipments, group_shipments)
+        shipment_ids = [s.shipment_id for s in all_shipments.values() if hasattr(s, 'shipment_id') and s.shipment_id]
+        
+        if not shipment_ids:
+            return
+        
+        db_type = get_db_type()
+        placeholder = "?" if db_type == "sqlite" else "%s"
+        placeholders = ", ".join([placeholder] * len(shipment_ids))
+        
+        from database import execute_query
+        from models import Box
+        
+        # Загружаем все коробки
+        boxes_data = execute_query(
+            f"SELECT id, shipment_id, box_id, is_current FROM boxes WHERE shipment_id IN ({placeholders}) ORDER BY box_id",
+            tuple(shipment_ids),
+            fetchall=True
+        )
+        
+        id_to_shipment = {}
+        for s in all_shipments.values():
+            if hasattr(s, 'shipment_id'):
+                id_to_shipment[s.shipment_id] = s
+        
+        # Создаём коробки
+        box_id_to_db_id = {}
+        for row in boxes_data:
+            box_db_id, sid, box_id, is_current = row
+            if sid in id_to_shipment:
+                box = Box(box_id)
+                id_to_shipment[sid].boxes.append(box)
+                if is_current:
+                    id_to_shipment[sid].current_box_index = len(id_to_shipment[sid].boxes) - 1
+                box_id_to_db_id[box_db_id] = (sid, box)
+        
+        # Загружаем содержимое всех коробок
+        if box_id_to_db_id:
+            box_db_ids = list(box_id_to_db_id.keys())
+            box_placeholders = ", ".join([placeholder] * len(box_db_ids))
+            
+            box_items_data = execute_query(
+                f"SELECT box_id, barcode, qty FROM box_items WHERE box_id IN ({box_placeholders})",
+                tuple(box_db_ids),
+                fetchall=True
+            )
+            
+            for row in box_items_data:
+                box_db_id, barcode, qty = row
+                if box_db_id in box_id_to_db_id:
+                    _, box = box_id_to_db_id[box_db_id]
+                    box.items[barcode] = qty
 
     def create_shipment_from_data(self, destination_name, font_size, label_font_size, theme,
                                   archived, archived_date, archived_by, removed_items_json,

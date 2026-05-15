@@ -3485,8 +3485,7 @@ class MainWindow(QMainWindow):
     def _update_sku_table_worker(self):
         """Worker для обновления SKU в фоновом потоке из Google Sheets"""
         import os
-        from database import execute_query
-        from db_connection import execute_transaction, get_connection
+        from db_connection import get_connection
         
         try:
             import gspread
@@ -3518,7 +3517,6 @@ class MainWindow(QMainWindow):
         records_with_labels = 0
         skipped_empty_barcode = 0
         for row in all_records:
-            # Получаем значения по ключам (зависит от заголовков в Google Sheets)
             barcode = str(row.get("Штрихкод", row.get("Barcode", row.get("штрихкод", "")))).strip()
             article = str(row.get("Артикул", row.get("Article", row.get("артикул", "")))).strip()
             name = str(row.get("Наименование", row.get("Name", row.get("наименование", "")))).strip()
@@ -3534,25 +3532,47 @@ class MainWindow(QMainWindow):
             if name and name.lower() not in ('nan', 'none', ''):
                 records_with_labels += 1
             
-            records_to_insert.append((barcode, article, name))
+            records_to_insert.append((barcode, article if article else None, name if name else None))
         
         if not records_to_insert:
             raise ValueError("Нет валидных записей для обновления SKU")
         
         self.logger.info(f"Подготовлено {len(records_to_insert)} записей SKU ({records_with_labels} с наименованиями)")
         
-        # Выполняем всё в одной транзакции
-        queries = []
-        queries.append(("DELETE FROM sku", ()))
+        # Массовая вставка через psycopg2.extras.execute_values (один запрос на все записи)
+        from db_connection import get_db_type
+        db_type = get_db_type()
+        conn = get_connection()
+        cursor = conn.cursor()
         
-        for barcode, article, name in records_to_insert:
-            queries.append((
-                "INSERT INTO sku (barcode, article, name) VALUES (%s, %s, %s)",
-                (barcode, article if article else None, name if name else None)
-            ))
-        
-        execute_transaction(queries)
-        self.logger.info(f"Пакетно вставлено {len(records_to_insert)} записей SKU в одной транзакции")
+        try:
+            if db_type == "sqlite":
+                # Для SQLite используем executemany
+                cursor.execute("DELETE FROM sku")
+                cursor.executemany(
+                    "INSERT INTO sku (barcode, article, name) VALUES (?, ?, ?) ON CONFLICT(barcode) DO UPDATE SET article=excluded.article, name=excluded.name",
+                    records_to_insert
+                )
+            else:
+                # Для PostgreSQL используем execute_values (гораздо быстрее)
+                import psycopg2.extras
+                
+                cursor.execute("DELETE FROM sku")
+                
+                psycopg2.extras.execute_values(
+                    cursor,
+                    "INSERT INTO sku (barcode, article, name) VALUES %s ON CONFLICT (barcode) DO UPDATE SET article = EXCLUDED.article, name = EXCLUDED.name",
+                    records_to_insert,
+                    page_size=1000
+                )
+            
+            conn.commit()
+            self.logger.info(f"Массово вставлено {len(records_to_insert)} записей SKU (db_type={db_type})")
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
         
         # Сбрасываем кэш наименований чтобы UI подхватил новые данные
         from database import clear_product_names_cache

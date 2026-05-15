@@ -1905,13 +1905,13 @@ class ShipmentManager:
     
     def import_boxes(self):
         """
-        Импорт коробок из Excel файла в формате экспорта
+        Импорт коробок из Excel файла в формате экспорта (асинхронно)
         """
         if not self.main_window.current_shipment:
             QMessageBox.warning(self.main_window, "Предупреждение", "Выберите поставку для импорта коробок!")
             return
         
-        # Открываем диалог выбора файла
+        # Открываем диалог выбора файла (должен быть в главном потоке)
         file_path, _ = QFileDialog.getOpenFileName(
             self.main_window,
             "Импорт коробок",
@@ -1922,137 +1922,121 @@ class ShipmentManager:
         if not file_path:
             return
         
-        try:
-            # Читаем Excel файл
-            df = pd.read_excel(file_path)
+        # Проверяем, что в поставке есть товары
+        if not self.main_window.current_shipment.shipment_items:
+            QMessageBox.critical(self.main_window, "Ошибка", 
+                "В текущей поставке нет товаров. Сначала добавьте товары в поставку.")
+            return
+        
+        self.main_window.show_status("Импорт коробок...", 3000)
+        
+        # Запускаем асинхронную обработку файла
+        self.async_manager.execute_async(
+            self._import_boxes_process_file,
+            callback=self._on_import_boxes_finished,
+            error_callback=self._on_import_boxes_error,
+            file_path=file_path
+        )
+
+    def _import_boxes_process_file(self, file_path):
+        """Обрабатывает файл импорта в фоновом потоке"""
+        df = pd.read_excel(file_path)
+        
+        required_columns = ['Баркод товара', 'Кол-во товаров', 'ШК короба']
+        if not all(col in df.columns for col in required_columns):
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            return {'success': False, 'error': f"Файл не содержит необходимые столбцы: {', '.join(missing_cols)}"}
+        
+        # Группируем данные по коробкам
+        boxes_data = {}
+        current_box_id = None
+        skipped_barcodes = []
+        shipment_items = dict(self.main_window.current_shipment.shipment_items)
+        
+        for _, row in df.iterrows():
+            barcode_raw = row['Баркод товара']
+            if pd.notna(barcode_raw):
+                barcode = str(int(barcode_raw)) if isinstance(barcode_raw, (int, float)) else str(barcode_raw).strip()
+            else:
+                barcode = ''
             
-            # Проверяем наличие необходимых столбцов
-            required_columns = ['Баркод товара', 'Кол-во товаров', 'ШК короба']
-            if not all(col in df.columns for col in required_columns):
-                missing_cols = [col for col in required_columns if col not in df.columns]
-                QMessageBox.critical(self.main_window, "Ошибка", 
-                    f"Файл не содержит необходимые столбцы: {', '.join(missing_cols)}\n"
-                    f"Требуются столбцы: {', '.join(required_columns)}")
-                return
+            qty = row['Кол-во товаров']
+            box_id = str(row['ШК короба']).strip() if pd.notna(row['ШК короба']) else ''
             
-            # Проверяем, что в поставке есть товары
-            if not self.main_window.current_shipment.shipment_items:
-                QMessageBox.critical(self.main_window, "Ошибка", 
-                    "В текущей поставке нет товаров. Сначала добавьте товары в поставку.")
-                return
+            if not barcode and not box_id:
+                continue
             
-            # Очищаем существующие коробки
-            self.main_window.current_shipment.boxes.clear()
+            if box_id and box_id != current_box_id:
+                current_box_id = box_id
+                if current_box_id not in boxes_data:
+                    boxes_data[current_box_id] = {}
             
-            # Группируем данные по коробкам
-            boxes_data = {}
-            current_box_id = None
-            
-            for _, row in df.iterrows():
-                # Обрабатываем штрихкод как строку, убирая .0 если это число
-                barcode_raw = row['Баркод товара']
-                if pd.notna(barcode_raw):
-                    if isinstance(barcode_raw, (int, float)):
-                        # Если это число, преобразуем в строку без десятичной части
-                        barcode = str(int(barcode_raw))
-                    else:
-                        # Если это уже строка, просто очищаем
-                        barcode = str(barcode_raw).strip()
-                else:
-                    barcode = ''
-                
-                qty = row['Кол-во товаров']
-                box_id = str(row['ШК короба']).strip() if pd.notna(row['ШК короба']) else ''
-                
-                # Пропускаем пустые строки
-                if not barcode and not box_id:
+            if barcode and current_box_id and pd.notna(qty):
+                if barcode not in shipment_items:
+                    skipped_barcodes.append(barcode)
                     continue
-                
-                # Если это новая коробка
-                if box_id and box_id != current_box_id:
-                    current_box_id = box_id
-                    if current_box_id not in boxes_data:
-                        boxes_data[current_box_id] = {}
-                
-                # Добавляем товар в текущую коробку
-                if barcode and current_box_id and pd.notna(qty):
-                    # Проверяем, что штрихкод существует в поставке
-                    if barcode not in self.main_window.current_shipment.shipment_items:
-                        self.logger.warning(f"Штрихкод {barcode} не найден в поставке, пропускаем")
-                        continue
-                        
-                    # Преобразуем количество в целое число
-                    try:
-                        qty_int = int(float(qty))
-                        if qty_int > 0:
-                            # Берем артикул из существующей поставки по штрихкоду
-                            sku = self.main_window.current_shipment.shipment_items[barcode].sku
-                            
-                            boxes_data[current_box_id][barcode] = {
-                                'qty': qty_int,
-                                'sku': sku
-                            }
-                    except (ValueError, TypeError):
-                        self.logger.warning(f"Некорректное количество для товара {barcode}: {qty}")
-                        continue
-            
-            # Создаем коробки
-            for box_id, items in boxes_data.items():
-                if items:  # Только если в коробке есть товары
-                    box = Box(box_id)
-                    # Преобразуем данные в формат, который ожидает Box
-                    box_items = {}
-                    for barcode, item_data in items.items():
-                        box_items[barcode] = item_data['qty']
-                    box.items = box_items
-                    self.main_window.current_shipment.boxes.append(box)
-            
-            # Обновляем распределение товаров
-            self.main_window.current_shipment.recalculate_allocated_qty_from_boxes()
-
-            # Сбрасываем кэши для корректного отображения прогресса
-            self.main_window.current_shipment.invalidate_caches()
-            
-            # Сохраняем изменения
-            self.save_shipment(self.main_window.current_shipment)
-
-            # Воспроизводим звук ПЕРЕД обновлением UI для мгновенного отклика
-            utils.play_sound(self.main_window.ok_sound, self.main_window.tone_sound)
-
-            # Обновляем интерфейс
-            self.main_window.ui_updater.update_ui()
-
-            # Если поставка является частью групповой поставки, обновляем и её
-            if (hasattr(self.main_window.current_shipment, 'parent_group') and
-                self.main_window.current_shipment.parent_group):
-                self.main_window.ui_updater.update_shipments_tree()
-
-            total_items = sum(len(items) for items in boxes_data.values())
-            
-            # Собираем информацию о пропущенных штрихкодах
-            skipped_barcodes = []
-            for _, row in df.iterrows():
-                barcode_raw = row['Баркод товара']
-                if pd.notna(barcode_raw):
-                    if isinstance(barcode_raw, (int, float)):
-                        barcode = str(int(barcode_raw))
-                    else:
-                        barcode = str(barcode_raw).strip()
                     
-                    if barcode and barcode not in self.main_window.current_shipment.shipment_items:
-                        skipped_barcodes.append(barcode)
-            
-            message = f"Успешно импортировано {len(boxes_data)} коробок с {total_items} товарами!"
-            if skipped_barcodes:
-                unique_skipped = list(set(skipped_barcodes))[:5]  # Показываем максимум 5 первых
-                message += f"\n\nПропущено штрихкодов, не найденных в поставке: {len(unique_skipped)}"
-                if len(unique_skipped) > 0:
-                    message += f"\nПримеры: {', '.join(unique_skipped)}"
-                if len(skipped_barcodes) > 5:
-                    message += f"\n... и ещё {len(skipped_barcodes) - 5} штрихкодов"
-            
-            QMessageBox.information(self.main_window, "Успех", message)
-            
-        except Exception as e:
-            QMessageBox.critical(self.main_window, "Ошибка", f"Не удалось импортировать коробки:\n{e}")
-            self.logger.error(f"Ошибка при импорте коробок: {e}", exc_info=True)
+                try:
+                    qty_int = int(float(qty))
+                    if qty_int > 0:
+                        sku = shipment_items[barcode].sku
+                        boxes_data[current_box_id][barcode] = {'qty': qty_int, 'sku': sku}
+                except (ValueError, TypeError):
+                    continue
+        
+        return {
+            'success': True,
+            'boxes_data': boxes_data,
+            'skipped_barcodes': skipped_barcodes,
+            'total_items': sum(len(items) for items in boxes_data.values()),
+        }
+
+    def _on_import_boxes_finished(self, result):
+        """Обработка успешного импорта коробок"""
+        if not result['success']:
+            QMessageBox.critical(self.main_window, "Ошибка", result['error'])
+            return
+        
+        # Очищаем существующие коробки
+        self.main_window.current_shipment.boxes.clear()
+        
+        # Создаем коробки
+        for box_id, items in result['boxes_data'].items():
+            if items:
+                box = Box(box_id)
+                box.items = {barcode: item_data['qty'] for barcode, item_data in items.items()}
+                self.main_window.current_shipment.boxes.append(box)
+        
+        # Обновляем распределение товаров
+        self.main_window.current_shipment.recalculate_allocated_qty_from_boxes()
+        self.main_window.current_shipment.invalidate_caches()
+        
+        # Сохраняем изменения
+        self.save_shipment(self.main_window.current_shipment)
+        
+        # Воспроизводим звук
+        utils.play_sound(self.main_window.ok_sound, self.main_window.tone_sound)
+        
+        # Обновляем интерфейс
+        self.main_window.ui_updater.update_ui()
+        
+        if (hasattr(self.main_window.current_shipment, 'parent_group') and
+            self.main_window.current_shipment.parent_group):
+            self.main_window.ui_updater.update_shipments_tree()
+        
+        # Формируем сообщение
+        message = f"Успешно импортировано {len(result['boxes_data'])} коробок с {result['total_items']} товарами!"
+        if result['skipped_barcodes']:
+            unique_skipped = list(set(result['skipped_barcodes']))[:5]
+            message += f"\n\nПропущено штрихкодов, не найденных в поставке: {len(unique_skipped)}"
+            if unique_skipped:
+                message += f"\nПримеры: {', '.join(unique_skipped)}"
+            if len(result['skipped_barcodes']) > 5:
+                message += f"\n... и ещё {len(result['skipped_barcodes']) - 5} штрихкодов"
+        
+        QMessageBox.information(self.main_window, "Успех", message)
+
+    def _on_import_boxes_error(self, error_msg):
+        """Обработка ошибки импорта коробок"""
+        self.logger.error(f"Ошибка импорта коробок: {error_msg}")
+        QMessageBox.critical(self.main_window, "Ошибка", f"Ошибка импорта коробок:\n{error_msg}")

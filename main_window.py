@@ -3486,6 +3486,7 @@ class MainWindow(QMainWindow):
         """Worker для обновления SKU в фоновом потоке из Google Sheets"""
         import os
         from database import execute_query
+        from db_connection import execute_transaction, get_connection
         
         try:
             import gspread
@@ -3512,24 +3513,46 @@ class MainWindow(QMainWindow):
         if not all_records:
             raise ValueError("Таблица SKU пуста или не удалось загрузить данные")
         
-        # Определяем колонки (первые 3: Штрихкод, Артикул, Наименование)
-        execute_query("DELETE FROM sku")
-        
+        # Собираем все записи для пакетной вставки
+        records_to_insert = []
         records_with_labels = 0
+        skipped_empty_barcode = 0
         for row in all_records:
             # Получаем значения по ключам (зависит от заголовков в Google Sheets)
             barcode = str(row.get("Штрихкод", row.get("Barcode", row.get("штрихкод", "")))).strip()
             article = str(row.get("Артикул", row.get("Article", row.get("артикул", "")))).strip()
             name = str(row.get("Наименование", row.get("Name", row.get("наименование", "")))).strip()
             
-            if not barcode:
+            # Нормализуем штрихкод: убираем пробелы, дефисы, приводим к единому формату
+            barcode = barcode.replace(" ", "").replace("-", "").replace("\t", "")
+            article = article.replace(" ", "").replace("\t", "")
+            
+            if not barcode or barcode.lower() in ('nan', 'none', ''):
+                skipped_empty_barcode += 1
                 continue
             
-            execute_query(
-                "INSERT INTO sku (barcode, article, name) VALUES (%s, %s, %s) ON CONFLICT (barcode) DO UPDATE SET article = EXCLUDED.article, name = EXCLUDED.name",
-                (barcode, article, name)
-            )
-            records_with_labels += 1
+            if name and name.lower() not in ('nan', 'none', ''):
+                records_with_labels += 1
+            
+            records_to_insert.append((barcode, article, name))
+        
+        if not records_to_insert:
+            raise ValueError("Нет валидных записей для обновления SKU")
+        
+        self.logger.info(f"Подготовлено {len(records_to_insert)} записей SKU ({records_with_labels} с наименованиями)")
+        
+        # Выполняем всё в одной транзакции
+        queries = []
+        queries.append(("DELETE FROM sku", ()))
+        
+        for barcode, article, name in records_to_insert:
+            queries.append((
+                "INSERT INTO sku (barcode, article, name) VALUES (%s, %s, %s)",
+                (barcode, article if article else None, name if name else None)
+            ))
+        
+        execute_transaction(queries)
+        self.logger.info(f"Пакетно вставлено {len(records_to_insert)} записей SKU в одной транзакции")
         
         # Сбрасываем кэш наименований чтобы UI подхватил новые данные
         from database import clear_product_names_cache
@@ -3537,15 +3560,18 @@ class MainWindow(QMainWindow):
         
         return {
             'records_with_labels': records_with_labels,
-            'missing_barcodes_count': 0,
+            'total_records': len(records_to_insert),
+            'skipped': skipped_empty_barcode,
         }
 
     def _on_sku_update_finished(self, result):
         """Обработка успешного обновления SKU"""
-        self.hide_progress(f"SKU обновлено: {result['records_with_labels']} с этикетками", 3000)
-        self.logger.info(f"Таблица SKU обновлена: {result['records_with_labels']} записей с этикетками, {result['missing_barcodes_count']} новых")
+        msg = f"SKU обновлено: {result['records_with_labels']} с наименованиями из {result['total_records']} (пропущено: {result.get('skipped', 0)})"
+        self.hide_progress(msg, 5000)
+        self.logger.info(msg)
         # Обновляем UI чтобы подхватить новые имена из SKU
         if self.current_shipment and self.ui_updater:
+            self.logger.info("Обновляем таблицу поставки после SKU update")
             self.ui_updater.update_shipment_table()
 
     def _on_sku_update_error(self, error_msg):

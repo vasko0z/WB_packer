@@ -35,16 +35,22 @@ def get_product_names_by_barcodes(barcodes: List[str]) -> Dict[str, str]:
        import time
        now = time.time()
        
+       # Нормализуем входные баркоды: убираем пробелы и дефисы
+       normalized_barcodes = []
+       for bc in barcodes:
+           nb = bc.replace(" ", "").replace("-", "").replace("\t", "") if bc else bc
+           normalized_barcodes.append(nb)
+       
        # Проверяем кэш — берём только те штрихкоды, которых нет в кэше или устарели
        uncached_barcodes = []
-       for bc in barcodes:
+       for bc in normalized_barcodes:
            if bc not in _product_names_cache or (bc in _product_names_cache_ttl and now - _product_names_cache_ttl[bc] > _PRODUCT_NAMES_CACHE_SECONDS):
                uncached_barcodes.append(bc)
        
        # Если всё в кэше — возвращаем из кэша
        result = {}
        if not uncached_barcodes:
-           for bc in barcodes:
+           for bc in normalized_barcodes:
                if bc in _product_names_cache:
                    result[bc] = _product_names_cache[bc]
            return result
@@ -114,14 +120,21 @@ def get_product_names_by_barcodes(barcodes: List[str]) -> Dict[str, str]:
        name_dict = {}
        for barcode, name in results:
            if barcode and name:
-               name_dict[barcode] = name
-               _product_names_cache[barcode] = name
-               _product_names_cache_ttl[barcode] = now
+               # Нормализуем баркод из результата
+               nb = barcode.replace(" ", "").replace("-", "").replace("\t", "") if barcode else barcode
+               name_dict[nb] = name
+               _product_names_cache[nb] = name
+               _product_names_cache_ttl[nb] = now
 
        # Добавляем кэшированные значения
-       for bc in barcodes:
+       for bc in normalized_barcodes:
            if bc in _product_names_cache and bc not in name_dict:
                name_dict[bc] = _product_names_cache[bc]
+
+       # Логируем баркоды без имени для отладки
+       missing = [bc for bc in normalized_barcodes if bc not in name_dict and bc]
+       if missing:
+           logger.warning(f"Не найдены наименования для {len(missing)} баркодов: {missing[:10]}{'...' if len(missing) > 10 else ''}")
 
        return name_dict
    except Exception as e:

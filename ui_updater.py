@@ -1,9 +1,8 @@
 # ui_updater.py
 import logging
-import json
 import time
 import traceback
-from PyQt6.QtWidgets import QTableWidgetItem, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QListWidgetItem, QTreeWidgetItem, QTableWidget, QHeaderView, QLineEdit, QSpinBox, QApplication, QSizePolicy
+from PyQt6.QtWidgets import QTableWidgetItem, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QTreeWidgetItem, QTableWidget, QHeaderView, QLineEdit, QSpinBox, QApplication, QSizePolicy
 from PyQt6.QtCore import Qt, QSize, QItemSelectionModel, QRegularExpression
 from PyQt6.QtGui import QColor, QLinearGradient, QPalette, QPixmap, QIcon, QRegularExpressionValidator, QFont
 import themes

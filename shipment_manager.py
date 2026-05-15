@@ -11,6 +11,7 @@ import utils
 from db_connection import _release_connection
 from models import Shipment, ShipmentItem, Box, GroupShipment, ShipmentProperties
 from dialogs import DestinationDialog, RenameDialog, ShipmentPropertiesDialog, BoxNumberDialog
+from app_constants import ColumnIndex, BoxColumnIndex
 
 # Добавляем импорт для работы с Word
 try:
@@ -1231,12 +1232,12 @@ class ShipmentManager:
         self.save_shipment_immediate()
 
     def on_shipment_cell_changed(self, row, column):
-        if not self.main_window.current_shipment or column != 2:
+        if not self.main_window.current_shipment or column != ColumnIndex.NAME:
             return
         item = self.main_window.shipment_table.item(row, column)
         if not item:
             return
-        barcode = self.main_window.shipment_table.item(row, 0).text()
+        barcode = self.main_window.shipment_table.item(row, ColumnIndex.BARCODE).text()
         if barcode not in self.main_window.current_shipment.shipment_items:
             return
         try:
@@ -1274,7 +1275,7 @@ class ShipmentManager:
 
     def on_box_cell_changed(self, row, column):
         """Обработчик изменения ячейки в таблице коробки"""
-        if not self.main_window.current_shipment or self.main_window.current_shipment.current_box_index < 0 or column != 2:
+        if not self.main_window.current_shipment or self.main_window.current_shipment.current_box_index < 0 or column != BoxColumnIndex.QTY:
             return
             
         try:
@@ -1495,7 +1496,7 @@ class ShipmentManager:
         if not item:
             return
         row = item.row()
-        barcode_item = self.main_window.current_box_table.item(row, 0)
+        barcode_item = self.main_window.current_box_table.item(row, BoxColumnIndex.BARCODE)
         if not barcode_item:
             return
         barcode = barcode_item.text()

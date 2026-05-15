@@ -9,8 +9,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLineEdit, QTableWidgetItem,
     QFileDialog, QLabel, QMessageBox, QSplitter, QHeaderView,
-    QListWidget, QMenu, QAbstractItemView, QProgressBar, QListWidgetItem,
-    QDialog, QTreeWidget, QTreeWidgetItem, QComboBox, QFrame
+    QMenu, QAbstractItemView, QDialog, QTreeWidget, QTreeWidgetItem, QFrame
 )
 from custom_table_widget import CustomTableWidget
 from app_constants import ColumnIndex
@@ -3015,36 +3014,46 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Ошибка при открытии архива:\n{e}")
 
     def archive_shipment(self, shipment_name):
-        """Архивировать ппоставккуавкиу"""
+        """Архивировать поставку (асинхронно)"""
         try:
             if not shipment_name:
                 return
                 
             reply = QMessageBox.question(
                 self, "Подтверждение архивации",
-                f"Вы уверены, что хотите отправить ппоставккуавкиу «{shipment_name}» в архив?\n\nПоставка будет скрыта из основного списка, но сохранена в базе данных.",
+                f"Вы уверены, что хотите отправить поставку «{shipment_name}» в архив?\n\nПоставка будет скрыта из основного списка, но сохранена в базе данных.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             
             if reply == QMessageBox.StandardButton.Yes:
-                # Принудительно сохраняем все отложенные изменения перед архивацией
                 self.force_save_session()
+                self.show_status(f"Архивация поставки «{shipment_name}»...", 3000)
                 
-                # Используем контроллер для архивации
-                if self.data_controller.archive_shipment(shipment_name, self.current_user):
-                    # Обновляем данные
-                    self.load_all_data()
-                    # Дополнительно обновляем дерево поставок для мгновенного отображения изменений
-                    self.ui_updater.update_shipments_tree()
-                    QMessageBox.information(self, "Успех", f"Поставка «{shipment_name}» отправлена в архив")
-                else:
-                    QMessageBox.critical(self, "Ошибка", "Не удалось отправить поставку в архив")
+                self.async_manager.execute_async(
+                    self.data_controller.archive_shipment,
+                    lambda result: self._on_archive_shipment_finished(result, shipment_name),
+                    lambda err: self._on_archive_shipment_error(err, shipment_name),
+                    shipment_name, self.current_user
+                )
         except Exception as e:
             self.logger.error(f"Ошибка при архивации поставки {shipment_name}: {e}", exc_info=True)
             QMessageBox.critical(self, "Ошибка", f"Ошибка при архивации поставки:\n{e}")
 
+    def _on_archive_shipment_finished(self, success, shipment_name):
+        """Обработка успешной архивации поставки"""
+        if success:
+            self.load_all_data()
+            QMessageBox.information(self, "Успех", f"Поставка «{shipment_name}» отправлена в архив")
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось отправить поставку в архив")
+
+    def _on_archive_shipment_error(self, error_msg, shipment_name):
+        """Обработка ошибки архивации поставки"""
+        self.logger.error(f"Ошибка при архивации поставки {shipment_name}: {error_msg}")
+        QMessageBox.critical(self, "Ошибка", f"Ошибка при архивации поставки:\n{error_msg}")
+
     def archive_group_shipment(self, group_name):
-        """Архивировать групповую поставку"""
+        """Архивировать групповую поставку (асинхронно)"""
         try:
             if not group_name:
                 return
@@ -3056,34 +3065,46 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
-                # Принудительно сохраняем все отложенные изменения перед архивацией
                 self.force_save_session()
+                self.show_status(f"Архивация групповой поставки «{group_name}»...", 3000)
                 
-                try:
-                    # Архивируем все подпоставки
-                    group_shipment = self.group_shipments[group_name]
-                    for shipment_name in group_shipment.sub_shipments.keys():
-                        # Обеспечиваем обратную совместимость при архивации
-                        shipment = group_shipment.sub_shipments[shipment_name]
-                        # Используем оригинальное имя поставки для архивации, если оно есть
-                        if hasattr(shipment, 'original_destination_name'):
-                            shipment_name_for_archive = shipment.original_destination_name
-                        else:
-                            # Для обратной совместимости с существующими данными используем destination_name
-                            shipment_name_for_archive = shipment.destination_name
-                        # Используем контроллер для архивации
-                        self.data_controller.archive_shipment(shipment_name_for_archive, self.current_user)
-                    
-                    # Обновляем данные
-                    self.load_all_data()
-                    # Дополнительно обновляем дерево поставок для мгновенного отображения изменений
-                    self.ui_updater.update_shipments_tree()
-                    QMessageBox.information(self, "Успех", f"Групповая поставка «{group_name}» отправлена в архив")
-                except Exception as e:
-                    QMessageBox.critical(self, "Ошибка", f"Не удалось отправить групповую поставку в архив:\n{e}")
+                # Собираем имена поставок для архивации
+                group_shipment = self.group_shipments[group_name]
+                shipment_names = []
+                for shipment_name, shipment in group_shipment.sub_shipments.items():
+                    if hasattr(shipment, 'original_destination_name'):
+                        shipment_names.append(shipment.original_destination_name)
+                    else:
+                        shipment_names.append(shipment.destination_name)
+                
+                self.async_manager.execute_async(
+                    self._archive_group_shipments_batch,
+                    callback=lambda result: self._on_archive_group_shipment_finished(result, group_name),
+                    error_callback=lambda err: self._on_archive_group_shipment_error(err, group_name),
+                    shipment_names=shipment_names
+                )
         except Exception as e:
-            self.logger.error(f"Ошибка при архивации группуовой поставки {group_name}: {e}", exc_info=True)
+            self.logger.error(f"Ошибка при архивации групповой поставки {group_name}: {e}", exc_info=True)
             QMessageBox.critical(self, "Ошибка", f"Ошибка при архивации групповой поставки:\n{e}")
+
+    def _archive_group_shipments_batch(self, shipment_names):
+        """Архивирует все подпоставки в фоне"""
+        for name in shipment_names:
+            self.data_controller.archive_shipment(name, self.current_user)
+        return True
+
+    def _on_archive_group_shipment_finished(self, success, group_name):
+        """Обработка успешной архивации групповой поставки"""
+        if success:
+            self.load_all_data()
+            QMessageBox.information(self, "Успех", f"Групповая поставка «{group_name}» отправлена в архив")
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось отправить групповую поставку в архив")
+
+    def _on_archive_group_shipment_error(self, error_msg, group_name):
+        """Обработка ошибки архивации групповой поставки"""
+        self.logger.error(f"Ошибка при архивации групповой поставки {group_name}: {error_msg}")
+        QMessageBox.critical(self, "Ошибка", f"Ошибка при архивации групповой поставки:\n{error_msg}")
 
     def start_shipment_check(self):
         """Начать проверку поставки с импорта Excel файла"""

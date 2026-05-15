@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QMessageBox, QComboBox, QCheckBox, QFormLayout, QGroupBox,
     QListWidget, QListWidgetItem, QFrame, QScrollArea, QWidget, QGridLayout,
     QDateEdit, QPlainTextEdit, QTreeWidgetItem, QTabWidget, QTreeWidget, QSplitter,
-    QTableWidget, QTableWidgetItem, QHeaderView, QInputDialog, QSlider, QTextEdit
+    QTableWidget, QTableWidgetItem, QHeaderView, QInputDialog, QSlider
 )
 from PyQt6.QtCore import Qt, QDate
 import database

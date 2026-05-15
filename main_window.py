@@ -1398,14 +1398,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'current_box_table') and self.current_box_table:
             self.current_box_table.updateGeometry()
 
-        # Еще раз вызываем processEvents для гарантии полной перерисовки интерфейса
-        QTimer.singleShot(600, lambda: QApplication.processEvents())
-
         # Обновляем UI для гарантии отображения всех данных
-        QTimer.singleShot(700, self.update_ui)
-
-        # Вызываем processEvents еще раз для гарантии визуального обновления
-        QTimer.singleShot(800, lambda: QApplication.processEvents())
+        QTimer.singleShot(400, self.update_ui)
 
         self.logger.info("Завершение загрузки состояния окна")
         
@@ -2985,10 +2979,7 @@ class MainWindow(QMainWindow):
         # Восстанавливаем размеры сплиттера при показе окна
         QTimer.singleShot(100, self.load_window_state)
         
-        # Дополнительно обновляем интерфейс для гарантии правильного отображе��ия
-        QTimer.singleShot(200, lambda: QApplication.processEvents())
-        
-        # Обновляем таблицы для обеспе��ения отображения данных
+        # Обновляем таблицы для обеспечения отображения данных
         if hasattr(self, 'shipment_table') and self.shipment_table:
             QTimer.singleShot(250, lambda: self.shipment_table.updateGeometry())
         if hasattr(self, 'current_box_table') and self.current_box_table:
@@ -2997,16 +2988,9 @@ class MainWindow(QMainWindow):
         # Дополнительно вызываем update_ui через 300 мс для гарантии отображения всех данных
         QTimer.singleShot(300, self.update_ui)
         
-        # Еще раз обновляем интерфейс через 350 мс для гарантии визуального обновления
-        QTimer.singleShot(350, lambda: QApplication.processEvents())
-        
         # Обновляем геометрию сплиттера через 400 мс для гарантии правильной перерисовки
         if hasattr(self, 'main_splitter'):
             QTimer.singleShot(400, lambda: self.main_splitter.updateGeometry())
-            
-        
-        # Вызываем processEvents еще раз через 500 мс для гарантии полной перерисовки интерфейса
-        QTimer.singleShot(500, lambda: QApplication.processEvents())
 
     def open_archive(self):
         """Открыть окно архива"""

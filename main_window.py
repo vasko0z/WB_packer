@@ -1437,6 +1437,9 @@ class MainWindow(QMainWindow):
                 self.async_manager.cancel_all_operations()
             else:
                 self.logger.debug("async_manager еще не инициализирован, пропускаем отмену операций")
+            # Cleanup Moysklad sync thread
+            if hasattr(self, 'improved_sync_handler') and self.improved_sync_handler:
+                self.improved_sync_handler.cleanup()
             event.accept()
         except Exception as e:
             self.logger.error(f"Ошибка при закрытии приложения: {e}", exc_info=True)

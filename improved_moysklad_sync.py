@@ -31,6 +31,14 @@ class ImprovedMoyskladSync(QObject):
         self.ui_updater_instance = ui_updater_instance
         self.api = None
         self.selected_stores = []
+        self.sync_thread = None
+        self.sync_worker = None
+
+    def cleanup(self):
+        """Безопасная очистка потока при закрытии приложения"""
+        if self.sync_thread and self.sync_thread.isRunning():
+            self.sync_thread.quit()
+            self.sync_thread.wait(5000)
 
     def initialize_api(self):
         """Инициализация API с проверкой глобальных настроек"""

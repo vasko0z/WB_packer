@@ -194,7 +194,7 @@ class AsyncOperationsManager:
         for thread, worker in self.active_threads[:]:  # Создаем копию списка для безопасного удаления
             try:
                 thread.quit()
-                thread.wait()
+                thread.wait(3000)  # Таймаут 3 секунды чтобы не блокировать закрытие
             except Exception as e:
                 logger.error(f"Ошибка при завершении потока: {e}", exc_info=True)
         

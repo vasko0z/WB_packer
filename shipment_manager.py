@@ -1931,7 +1931,7 @@ class ShipmentManager:
         self.main_window.show_progress("Импорт коробок...")
         
         # Запускаем асинхронную обработку файла
-        self.async_manager.execute_async(
+        self.main_window.async_manager.execute_async(
             self._import_boxes_process_file,
             callback=self._on_import_boxes_finished,
             error_callback=self._on_import_boxes_error,

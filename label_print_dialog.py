@@ -771,6 +771,9 @@ class LabelPrintDialog(QDialog):
         self.setWindowTitle("Печать этикеток")
         self.setModal(True)
         self.resize(400, 250)
+        
+        # Поток для SKU обновления
+        self._sku_thread = None
 
         layout = QVBoxLayout()
         self.setLayout(layout)
@@ -1227,3 +1230,10 @@ class LabelPrintDialog(QDialog):
                                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply != QMessageBox.StandardButton.Yes:
                 break
+
+    def closeEvent(self, event):
+        """Безопасное закрытие диалога с ожиданием завершения потока"""
+        if self._sku_thread and self._sku_thread.isRunning():
+            self._sku_thread.quit()
+            self._sku_thread.wait(5000)  # Ждём до 5 секунд
+        super().closeEvent(event)

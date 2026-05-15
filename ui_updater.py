@@ -979,9 +979,12 @@ class UIUpdater:
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(8)
 
-        status_icon = group_shipment.get_status_icon()
-        status_label = QLabel(status_icon)
-        status_label.setFixedSize(24, 24)  # Увеличили размер
+        status_icon_svg = group_shipment.get_status_icon()
+        status_pixmap = QPixmap()
+        status_pixmap.loadFromData(status_icon_svg.encode('utf-8'))
+        status_label = QLabel()
+        status_label.setPixmap(status_pixmap.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        status_label.setFixedSize(24, 24)
         # Устанавливаем шрифт с явным размером из настроек
         status_font = QFont()
         status_font.setPointSize(self.main_window.font_size)

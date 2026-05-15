@@ -69,8 +69,8 @@ class MainWindow(QMainWindow):
         # Устанавливаем политику фокуса, чтобы окно могло получать фокус
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
-        # Скрыть строку состояния
-        self.statusBar().hide()
+        # Инициализация статус-бара
+        self.statusBar().showMessage("Готово")
         
         # Инициализация переменных
         self.saving = False

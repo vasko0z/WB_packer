@@ -384,11 +384,14 @@ QSplitter::handle:hover {{
     background-color: transparent;
 }}
 QStatusBar {{
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 {theme["header_bg"].name()},
-        stop: 1 {theme["button_bg"].name()});
-    color: {theme["header_text"].name()};
-    border-top: none;
+    background-color: {theme["window_bg"].darker(105).name()};
+    color: {theme["window_text"].name()};
+    border-top: 1px solid {theme["button_border"].name()};
+    font-size: 12px;
+    padding: 2px;
+}}
+QStatusBar::item {{
+    border: none;
 }}
 """)
     elif theme_name == "macOS":
@@ -642,9 +645,14 @@ QSplitter::handle:vertical {{
 }}
 
 QStatusBar {{
-    background-color: {theme["window_bg"].name()};
+    background-color: {theme["window_bg"].darker(102).name()};
     color: {theme["window_text"].name()};
     border-top: 1px solid {theme["button_border"].name()};
+    font-size: 12px;
+    padding: 2px;
+}}
+QStatusBar::item {{
+    border: none;
 }}
 """)
     else:
@@ -907,10 +915,13 @@ QSplitter::handle:hover {{
     background-color: transparent;
 }}
 QStatusBar {{
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 {theme["header_bg"].name()},
-        stop: 1 {theme["button_bg"].name()});
-    color: {theme["header_text"].name()};
-    border-top: none;
+    background-color: {theme["window_bg"].darker(110).name()};
+    color: {theme["window_text"].name()};
+    border-top: 1px solid {theme["button_border"].name()};
+    font-size: 12px;
+    padding: 2px;
+}}
+QStatusBar::item {{
+    border: none;
 }}
 """)

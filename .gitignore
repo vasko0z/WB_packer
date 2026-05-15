@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Сборка и дистрибуция
+build/
+dist/
+*.exe
+
+# Логи
+*.log
+debug.log
+debug_log.txt
+
+# Файлы настроек (содержат персональные данные и пароли)
+settings.json
+db_config.json
+label_printer.db
+shipment_check_state.json
+version_info.json
+
+# Файлы базы данных
+*.db
+*.sqlite
+*.sqlite3
+wb_packer.db
+
+# Секреты и переменные окружения
+.env
+.env.local
+.env.production
+*.key
+*.pem
+
+# Временные файлы
+*.tmp
+*.bak
+nul
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Папки с генерируемыми данными
+PDF/
+SKU/
+doc/
+
+# Spec файлы (генерируются PyInstaller, но можно раскомментировать если нужно хранить)
+# *.spec
+
+# Тестовые данные
+test_config.txt

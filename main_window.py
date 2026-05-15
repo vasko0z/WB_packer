@@ -3,8 +3,8 @@ import sys
 import json
 import logging
 from datetime import datetime
-from PyQt6.QtCore import Qt, QSize, QTimer, QThread
-from PyQt6.QtGui import QFont, QKeySequence, QShortcut, QBrush, QColor, QPixmap, QIcon
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QKeySequence, QShortcut, QColor, QPixmap, QIcon
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLineEdit, QTableWidgetItem,
@@ -48,12 +48,6 @@ from shipment_controller import ShipmentController
 from data_controller import DataController
 from async_operations import AsyncOperationsManager
 # MainController импортируется лениво в _lazy_init_controllers() для избежания циклических импортов
-
-# psycopg2 импортируется только если нужен для обработки исключений
-try:
-    import psycopg2
-except ImportError:
-    psycopg2 = None
 
 
 class MainWindow(QMainWindow):

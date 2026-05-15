@@ -3358,10 +3358,10 @@ class MainWindow(QMainWindow):
         except ImportError:
             raise ImportError("Установите gspread: pip install gspread google-auth")
         
-        # Загрузка credentials из файла или переменной окружения
-        credentials_path = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "google_credentials.json")
+        # Загрузка credentials из файла service account
+        credentials_path = os.path.join(os.path.dirname(__file__), "e-object-470910-p6-3500f3ddbdd3.json")
         if not os.path.exists(credentials_path):
-            raise FileNotFoundError(f"Файл credentials не найден: {credentials_path}\nСкачайте service account credentials с https://console.cloud.google.com/")
+            raise FileNotFoundError(f"Файл credentials не найден: {credentials_path}")
         
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_file(credentials_path, scopes=scope)

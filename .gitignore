@@ -29,9 +29,10 @@ debug_log.txt
 # Файлы настроек (содержат персональные данные и пароли)
 settings.json
 db_config.json
-label_printer.db
 shipment_check_state.json
 version_info.json
+e-object-*.json
+google_credentials.json
 
 # Файлы базы данных
 *.db

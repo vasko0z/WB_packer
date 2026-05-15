@@ -3337,7 +3337,7 @@ class MainWindow(QMainWindow):
             self.logger.warning(f"Файл SKU {sku_path} не найден, пропускаем обновление")
             return
         
-        self.show_progress("Обновление таблицы SKU...")
+        self.show_busy_progress("Обновление таблицы SKU...")
         self.logger.info("Запуск асинхронного обновления таблицы SKU")
         
         self.async_manager.execute_async(
@@ -3509,8 +3509,14 @@ class MainWindow(QMainWindow):
 
     def show_progress(self, message: str, max_value: int = 100):
         """Показывает прогресс-бар в статус-баре"""
+        self.status_progress_bar.setRange(0, max_value)
         self.status_progress_bar.setValue(0)
-        self.status_progress_bar.setMaximum(max_value)
+        self.status_progress_bar.setVisible(True)
+        self.statusBar().showMessage(message)
+
+    def show_busy_progress(self, message: str):
+        """Показывает прогресс-бар в режиме занятости (бесконечная анимация)"""
+        self.status_progress_bar.setRange(0, 0)
         self.status_progress_bar.setVisible(True)
         self.statusBar().showMessage(message)
 
@@ -3522,5 +3528,6 @@ class MainWindow(QMainWindow):
 
     def hide_progress(self, message: str = "Готово", timeout: int = 2000):
         """Скрывает прогресс-бар и показывает сообщение"""
+        self.status_progress_bar.setRange(0, 100)
         self.status_progress_bar.setVisible(False)
         self.statusBar().showMessage(message, timeout)

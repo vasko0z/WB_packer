@@ -1991,7 +1991,7 @@ class ShipmentManager:
                     self.main_window.current_shipment.boxes.append(box)
             
             # Обновляем распределение товаров
-            self.main_window.current_shipment.update_allocation_from_boxes()
+            self.main_window.current_shipment.recalculate_allocated_qty_from_boxes()
 
             # Сбрасываем кэши для корректного отображения прогресса
             self.main_window.current_shipment.invalidate_caches()

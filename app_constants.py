@@ -1,7 +1,34 @@
 """
 Константы приложения WB Packer
 """
+from enum import IntEnum
 from PyQt6.QtGui import QColor
+
+
+class ColumnIndex(IntEnum):
+    """Индексы столбцов таблицы поставки"""
+    BARCODE = 0
+    SKU = 1
+    NAME = 2
+    TOTAL_QTY = 3
+    REMAINING_QTY = 4
+    STOCK_QTY = 5
+    ACTION = 6
+
+
+class BoxColumnIndex(IntEnum):
+    """Индексы столбцов таблицы коробки"""
+    BARCODE = 0
+    SKU = 1
+    QTY = 2
+
+
+class RemovedColumnIndex(IntEnum):
+    """Индексы столбцов таблицы удалённых товаров"""
+    BARCODE = 0
+    SKU = 1
+    ACTION = 2
+
 
 # ============================================================================
 # Размеры элементов UI

@@ -295,17 +295,6 @@ class Shipment:
             del self.removed_items[barcode]
             self.invalidate_caches()
 
-    def update_allocation_from_boxes(self) -> None:
-        for item in self.shipment_items.values():
-            item.allocated_qty = 0
-
-        for box in self.boxes:
-            for barcode, qty in box.items.items():
-                if barcode in self.shipment_items:
-                    self.shipment_items[barcode].allocated_qty += qty
-
-        self.invalidate_caches()
-
     def set_current_user(self) -> None:
         self.last_activity = datetime.now()
 

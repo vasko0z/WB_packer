@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 )
 from custom_table_widget import CustomTableWidget
 from PyQt6.QtPrintSupport import QPrinter
+from app_constants import ColumnIndex
 
 import database
 import config
@@ -288,10 +289,6 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.critical(self, "Ошибка БД", f"Не удалось инициализировать базу данных:\n{e}")
                 sys.exit(1)
-        except Exception as e:
-            self.logger.error(f"Неизвестная ошибка при инициализации базы данных: {e}", exc_info=True)
-            QMessageBox.critical(self, "Ошибка БД", f"Неизвестная ошибка при инициализации базы данных:\n{e}")
-            sys.exit(1)
 
     def _init_menu_bar(self):
         """Инициализация меню "Сервис" и его пунктов"""
@@ -705,10 +702,10 @@ class MainWindow(QMainWindow):
 
         # Применяем видимость к столбцам таблицы
         if hasattr(self, 'shipment_table') and self.shipment_table:
-            self.shipment_table.setColumnHidden(1, not article_visible)  # Артикул
-            self.shipment_table.setColumnHidden(2, not name_visible)     # Имя
-            self.shipment_table.setColumnHidden(3, not total_qty_visible)  # Всего
-            self.shipment_table.setColumnHidden(5, not stock_visible)    # На складе (индекс 5)
+            self.shipment_table.setColumnHidden(ColumnIndex.SKU, not article_visible)
+            self.shipment_table.setColumnHidden(ColumnIndex.NAME, not name_visible)
+            self.shipment_table.setColumnHidden(ColumnIndex.TOTAL_QTY, not total_qty_visible)
+            self.shipment_table.setColumnHidden(ColumnIndex.STOCK_QTY, not stock_visible)
 
     def _init_main_splitter(self):
         """Создание основного горизонтального сплиттера"""
@@ -853,9 +850,9 @@ class MainWindow(QMainWindow):
         for col in range(self.shipment_table.columnCount()):
             header.setMinimumSectionSize(30)
 
-        self.shipment_table.setColumnHidden(2, True)
-        if self.shipment_table.columnCount() > 4:
-            self.shipment_table.setItemDelegateForColumn(4, QuantityEditDelegate())
+        self.shipment_table.setColumnHidden(ColumnIndex.NAME, True)
+        if self.shipment_table.columnCount() > ColumnIndex.REMAINING_QTY:
+            self.shipment_table.setItemDelegateForColumn(ColumnIndex.REMAINING_QTY, QuantityEditDelegate())
 
         self.shipment_table.itemDoubleClicked.connect(self.on_shipment_table_item_double_clicked)
         self.shipment_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1265,74 +1262,65 @@ class MainWindow(QMainWindow):
         """Управление отображением столбца "Имя"""
         try:
             is_visible = (state == Qt.CheckState.Checked.value)
-            self.name_column_visible = is_visible  # Сохраняем состояние в переменную экземпляра
-            self.shipment_table.setColumnHidden(2, not is_visible)  # Столбец "Имя" имеет индекс 2
+            self.name_column_visible = is_visible
+            self.shipment_table.setColumnHidden(ColumnIndex.NAME, not is_visible)
 
-            # Если столбец показывается, убедимся, что у него есть ширина
-            if is_visible and self.shipment_table.columnWidth(2) == 0:
-                self.shipment_table.setColumnWidth(2, 100)  # Ширина по умолчанию
+            if is_visible and self.shipment_table.columnWidth(ColumnIndex.NAME) == 0:
+                self.shipment_table.setColumnWidth(ColumnIndex.NAME, 100)
 
-            # Сохраняем настройки пользователя (только если инициализация завершена и не идёт загрузка)
             if getattr(self, 'initialization_complete', False) and not getattr(self, '_loading_settings', False):
                 self.save_user_settings()
 
-            # Обновляем UI для немедленного отображения изменений
             from PyQt6.QtWidgets import QApplication
             QApplication.processEvents()
         except Exception as e:
             self.logger.error(f"Ошибка при переключении столбца 'Имя': {e}", exc_info=True)
 
     def toggle_total_qty_column(self, state):
-        """Управление отображением ст��лбца "Всего"""
+        """Управление отображением столбца "Всего"""
         try:
             is_visible = (state == Qt.CheckState.Checked.value)
-            self.total_qty_column_visible = is_visible  # Сохраняем состояние в переменную экземпляра
-            self.shipment_table.setColumnHidden(3, not is_visible)  # Столбец "Всего" имеет индекс 3
+            self.total_qty_column_visible = is_visible
+            self.shipment_table.setColumnHidden(ColumnIndex.TOTAL_QTY, not is_visible)
 
-            # Если столбец показывается, убедимся, что у него есть ширина
-            if is_visible and self.shipment_table.columnWidth(3) == 0:
-                self.shipment_table.setColumnWidth(3, 100)  # Ширина по умолчанию
+            if is_visible and self.shipment_table.columnWidth(ColumnIndex.TOTAL_QTY) == 0:
+                self.shipment_table.setColumnWidth(ColumnIndex.TOTAL_QTY, 100)
 
-            # Сохраняем настройки пользователя (только если инициализация завершена и не идёт загрузка)
             if getattr(self, 'initialization_complete', False) and not getattr(self, '_loading_settings', False):
                 self.save_user_settings()
 
-            # Обновляем UI для немедленного отображения изменений
             from PyQt6.QtWidgets import QApplication
             QApplication.processEvents()
         except Exception as e:
             self.logger.error(f"Ошибка при переключении столбца 'Всего': {e}", exc_info=True)
             
     def toggle_article_column(self, state):
-        """Управление отображением столбца "Артик��л"""
+        """Управление отображением столбца "Артикул"""
         try:
             is_visible = (state == Qt.CheckState.Checked.value)
-            self.article_column_visible = is_visible  # Сохраняем состояние в переменную экземпляра
-            self.shipment_table.setColumnHidden(1, not is_visible)  # Столбец "Артикул" имеет индекс 1
+            self.article_column_visible = is_visible
+            self.shipment_table.setColumnHidden(ColumnIndex.SKU, not is_visible)
 
-            # Если столбец показывается, убедимся, что у него есть ширина
-            if is_visible and self.shipment_table.columnWidth(1) == 0:
-                self.shipment_table.setColumnWidth(1, 100)  # Ширина по умолчанию
+            if is_visible and self.shipment_table.columnWidth(ColumnIndex.SKU) == 0:
+                self.shipment_table.setColumnWidth(ColumnIndex.SKU, 100)
 
-            # Сохраняем настройки пользователя (только если инициализация завершена и не идёт загрузка)
             init_complete = getattr(self, 'initialization_complete', False)
             loading = getattr(self, '_loading_settings', False)
             self.logger.debug(f"toggle_article_column: init={init_complete}, loading={loading}, save={init_complete and not loading}, article={self.article_column_visible}")
             if init_complete and not loading:
                 self.save_user_settings()
 
-            # Обновляем UI для немедленного отображения изменений
             from PyQt6.QtWidgets import QApplication
             QApplication.processEvents()
         except Exception as e:
             self.logger.error(f"Ошибка при переключении столбца 'Артикул': {e}", exc_info=True)
             
     def toggle_stock_column(self, state):
-        """У��равление отображением столбца "На складе"""
+        """Управление отображением столбца "На складе"""
         try:
             is_visible = (state == Qt.CheckState.Checked.value)
-            self.stock_column_visible = is_visible  # Сохраняем состояние в переменную экземпляра
-            self.shipment_table.setColumnHidden(5, not is_visible)  # Столбец "На складе" имеет индекс 5
+            self.stock_column_visible = is_visible
+            self.shipment_table.setColumnHidden(ColumnIndex.STOCK_QTY, not is_visible)
 
             self.logger.info(f"toggle_stock_column: is_visible={is_visible}, initialization_complete={getattr(self, 'initialization_complete', False)}, _loading_settings={getattr(self, '_loading_settings', False)}")
 
@@ -1648,8 +1636,8 @@ class MainWindow(QMainWindow):
         
         # Принудительно устанавливаем ширину столбца 6 с кнопками, т.к. resizeColumnsToContents не учитывает виджеты
         if hasattr(self, 'shipment_table') and self.shipment_table:
-            self.shipment_table.setColumnWidth(6, 100)
-            self.shipment_table.setColumnHidden(6, False)
+            self.shipment_table.setColumnWidth(ColumnIndex.ACTION, 100)
+            self.shipment_table.setColumnHidden(ColumnIndex.ACTION, False)
 
         if hasattr(self, 'current_box_table') and self.current_box_table and self.box_columns_width:
             try:

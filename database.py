@@ -117,88 +117,9 @@ def get_product_names_by_barcodes(barcodes):
                name_dict[bc] = _product_names_cache[bc]
 
        return name_dict
-   except Exception as e:
-       logger.error(f"Ошибка при получении наименований по штрихкодам: {e}", exc_info=True)
-       return {}
-
-       placeholders = ','.join(['%s'] * len(barcodes))
-
-       # Для SQLite используем GROUP BY вместо DISTINCT ON
-       db_type = get_db_type()
-       
-       if db_type == 'sqlite':
-           # Для SQLite используем GROUP BY вместо DISTINCT ON
-           placeholders = ','.join(['?'] * len(barcodes))
-           query = f"""
-               SELECT barcode, MIN(name) as name
-               FROM (
-                   -- Сначала берём все записи из sku с приоритетом 1
-                   SELECT barcode, name, 1 as priority
-                   FROM sku
-                   WHERE barcode IN ({placeholders})
-                   AND name IS NOT NULL
-                   AND name != ''
-
-                   UNION ALL
-
-                   -- Потом берём записи из shipment_items только для тех баркодов, которых нет в sku
-                   SELECT si.barcode, si.sku as name, 2 as priority
-                   FROM shipment_items si
-                   WHERE si.barcode IN ({placeholders})
-                   AND si.sku IS NOT NULL
-                   AND si.sku != ''
-                   AND NOT EXISTS (
-                       SELECT 1 FROM sku s
-                       WHERE s.barcode = si.barcode
-                       AND s.name IS NOT NULL
-                       AND s.name != ''
-                   )
-               ) AS combined
-               GROUP BY barcode
-               ORDER BY barcode
-           """
-       else:
-           # Для PostgreSQL используем DISTINCT ON
-           query = f"""
-               SELECT DISTINCT ON (barcode) barcode, name
-               FROM (
-                   -- Сначала берём все записи из sku с приоритетом 1
-                   SELECT barcode, name, 1 as priority
-                   FROM sku
-                   WHERE barcode IN ({placeholders})
-                   AND name IS NOT NULL
-                   AND name != ''
-
-                   UNION ALL
-
-                   -- Потом берём записи из shipment_items только для тех баркодов, которых нет в sku
-                   SELECT si.barcode, si.sku as name, 2 as priority
-                   FROM shipment_items si
-                   WHERE si.barcode IN ({placeholders})
-                   AND si.sku IS NOT NULL
-                   AND si.sku != ''
-                   AND NOT EXISTS (
-                       SELECT 1 FROM sku s
-                       WHERE s.barcode = si.barcode
-                       AND s.name IS NOT NULL
-                       AND s.name != ''
-                   )
-               ) AS combined
-               ORDER BY barcode, priority
-           """
-
-       results = execute_query(query, barcodes * 2, fetchall=True)
-
-       name_dict = {}
-       for barcode, name in results:
-           if barcode and name:
-               name_dict[barcode] = name
-
-       logger.info(f"Получены наименования для {len(name_dict)} из {len(barcodes)} штрихкодов")
-       return name_dict
-   except Exception as e:
-       logger.error(f"Ошибка при получении наименований по штрихкодам: {e}", exc_info=True)
-       return {}
+    except Exception as e:
+        logger.error(f"Ошибка при получении наименований по штрихкодам: {e}", exc_info=True)
+        return {}
 
 
 _stock_qty_cache = {}

@@ -117,9 +117,9 @@ def get_product_names_by_barcodes(barcodes):
                name_dict[bc] = _product_names_cache[bc]
 
        return name_dict
-    except Exception as e:
-        logger.error(f"Ошибка при получении наименований по штрихкодам: {e}", exc_info=True)
-        return {}
+   except Exception as e:
+       logger.error(f"Ошибка при получении наименований по штрихкодам: {e}", exc_info=True)
+       return {}
 
 
 _stock_qty_cache = {}

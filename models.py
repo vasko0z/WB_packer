@@ -236,12 +236,14 @@ class Shipment:
         if self._status_icon_cache is not None:
             return self._status_icon_cache
 
+        from app_constants import STATUS_ICONS, ShipmentStatus
+
         if self.is_completed() and not self.has_discrepancies():
-            icon = "✅"
+            icon = STATUS_ICONS[ShipmentStatus.COMPLETED]
         elif self.has_discrepancies():
-            icon = "⚠️"
+            icon = STATUS_ICONS[ShipmentStatus.HAS_DISCREPANCIES]
         else:
-            icon = "🕘"
+            icon = STATUS_ICONS[ShipmentStatus.IN_PROGRESS]
 
         self._status_icon_cache = icon
         return icon
@@ -347,12 +349,14 @@ class GroupShipment:
             if shipment.has_discrepancies():
                 has_discrepancies = True
 
+        from app_constants import STATUS_ICONS, ShipmentStatus
+
         if all_completed and not has_discrepancies:
-            icon = "✅"
+            icon = STATUS_ICONS[ShipmentStatus.COMPLETED]
         elif has_discrepancies:
-            icon = "⚠️"
+            icon = STATUS_ICONS[ShipmentStatus.HAS_DISCREPANCIES]
         else:
-            icon = "🕘"
+            icon = STATUS_ICONS[ShipmentStatus.IN_PROGRESS]
 
         self._status_icon_cache = icon
         return icon

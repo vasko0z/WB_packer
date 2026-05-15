@@ -159,3 +159,17 @@ DB_INDEXES = [
     'idx_user_sessions_shipment_name',
     'idx_user_sessions_username',
 ]
+
+
+class ShipmentStatus:
+    """Статусы поставки"""
+    COMPLETED = "completed"
+    IN_PROGRESS = "in_progress"
+    HAS_DISCREPANCIES = "has_discrepancies"
+
+
+STATUS_ICONS = {
+    ShipmentStatus.COMPLETED: "\u2705",
+    ShipmentStatus.HAS_DISCREPANCIES: "\u26a0\ufe0f",
+    ShipmentStatus.IN_PROGRESS: "\U0001f558",
+}

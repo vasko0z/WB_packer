@@ -3348,75 +3348,53 @@ class MainWindow(QMainWindow):
         )
 
     def _update_sku_table_worker(self, sku_path):
-        """Worker для обновления SKU в фоновом потоке"""
+        """Worker для обновления SKU в фоновом потоке из Google Sheets"""
         import os
-        from openpyxl import load_workbook
         from database import execute_query
         
+        try:
+            import gspread
+            from google.oauth2.service_account import Credentials
+        except ImportError:
+            raise ImportError("Установите gspread: pip install gspread google-auth")
+        
+        # Загрузка credentials из файла или переменной окружения
+        credentials_path = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "google_credentials.json")
+        if not os.path.exists(credentials_path):
+            raise FileNotFoundError(f"Файл credentials не найден: {credentials_path}\nСкачайте service account credentials с https://console.cloud.google.com/")
+        
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_file(credentials_path, scopes=scope)
+        client = gspread.authorize(creds)
+        
+        # ID таблицы из URL
+        spreadsheet_id = "1tQzh_qTnldbpeu9ryNF8ZKY4-amwT8UfuMqbSU1qOlA"
+        sheet = client.open_by_key(spreadsheet_id).sheet1
+        
+        # Получаем все данные
+        all_records = sheet.get_all_records()
+        
+        if not all_records:
+            raise ValueError("Таблица SKU пуста или не удалось загрузить данные")
+        
+        # Определяем колонки (первые 3: Штрихкод, Артикул, Наименование)
         execute_query("DELETE FROM sku")
         
-        wb = load_workbook(sku_path)
-        try:
-            ws = wb["Лист1"]
-        except KeyError:
-            ws = wb.active
-        
-        pdf_barcodes = set()
-        if os.path.exists("PDF"):
-            pdf_barcodes = {f[:-4] for f in os.listdir("PDF") if f.endswith('.pdf')}
-        
-        table_barcodes = set()
-        barcode_rows = {}
-        
-        for row in range(2, ws.max_row + 1):
-            barcode_cell = ws.cell(row=row, column=1)
-            if barcode_cell.value is None:
-                continue
-            barcode = str(barcode_cell.value)
-            table_barcodes.add(barcode)
-            barcode_rows[barcode] = row
-        
-        for barcode, row in barcode_rows.items():
-            label_status = "Есть" if barcode in pdf_barcodes else "Нет"
-            ws.cell(row=row, column=4, value=label_status)
-        
-        try:
-            add_ws = wb["Добавить"]
-        except KeyError:
-            add_ws = wb.create_sheet("Добавить")
-            add_ws.cell(row=1, column=1, value="Штрихкод")
-            add_ws.cell(row=1, column=2, value="Артикул")
-            add_ws.cell(row=1, column=3, value="Наименование")
-            add_ws.cell(row=1, column=4, value="Этикетка (есть/нет)")
-        
-        next_add_row = 2
-        while next_add_row <= add_ws.max_row and add_ws.cell(row=next_add_row, column=1).value is not None:
-            next_add_row += 1
-        
-        missing_barcodes = pdf_barcodes - table_barcodes
-        for barcode in missing_barcodes:
-            add_ws.cell(row=next_add_row, column=1, value=barcode)
-            add_ws.cell(row=next_add_row, column=4, value="Есть")
-            next_add_row += 1
-        
-        wb.save(sku_path)
-        
         records_with_labels = 0
-        for row in range(2, ws.max_row + 1):
-            barcode_cell = ws.cell(row=row, column=1)
-            if barcode_cell.value is None:
+        for row in all_records:
+            # Получаем значения по ключам (зависит от заголовков в Google Sheets)
+            barcode = str(row.get("Штрихкод", row.get("Barcode", row.get("штрихкод", "")))).strip()
+            article = str(row.get("Артикул", row.get("Article", row.get("артикул", "")))).strip()
+            name = str(row.get("Наименование", row.get("Name", row.get("наименование", "")))).strip()
+            
+            if not barcode:
                 continue
-            barcode = str(barcode_cell.value)
-            article = ws.cell(row=row, column=2).value or ""
-            name = ws.cell(row=row, column=3).value or ""
             
             execute_query(
                 "INSERT INTO sku (barcode, article, name) VALUES (%s, %s, %s) ON CONFLICT (barcode) DO UPDATE SET article = EXCLUDED.article, name = EXCLUDED.name",
                 (barcode, article, name)
             )
-            
-            if barcode in pdf_barcodes:
-                records_with_labels += 1
+            records_with_labels += 1
         
         # Сбрасываем кэш наименований чтобы UI подхватил новые данные
         from database import clear_product_names_cache
@@ -3424,7 +3402,7 @@ class MainWindow(QMainWindow):
         
         return {
             'records_with_labels': records_with_labels,
-            'missing_barcodes_count': len(missing_barcodes),
+            'missing_barcodes_count': 0,
         }
 
     def _on_sku_update_finished(self, result):

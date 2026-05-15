@@ -316,10 +316,17 @@ class SettingsDialog(QDialog):
         
         sku_info = QLabel(
             "Таблица SKU содержит информацию о штрихкодах, артикулах и наименованиях товаров.\n"
-            "Используется для автоматического заполнения наименований при сканировании штрихкодов."
+            "Используется для автоматического заполнения наименований при сканировании штрихкодов.\n"
+            "Данные загружаются из Google Sheets."
         )
         sku_info.setWordWrap(True)
         sku_group_layout.addWidget(sku_info)
+        
+        # Ссылка на Google Sheets
+        sheets_link = QLabel('<a href="https://docs.google.com/spreadsheets/d/1tQzh_qTnldbpeu9ryNF8ZKY4-amwT8UfuMqbSU1qOlA/edit">📊 Открыть Google Sheets таблицу SKU</a>')
+        sheets_link.setOpenExternalLinks(True)
+        sheets_link.setStyleSheet("font-size: 12px; padding: 5px;")
+        sku_group_layout.addWidget(sheets_link)
         
         self.update_sku_btn = QPushButton("Актуализировать таблицу SKU")
         self.update_sku_btn.clicked.connect(self.update_sku_table)

@@ -1092,12 +1092,20 @@ class UIUpdater:
 
             try:
                 self.main_window.shipment_table.cellChanged.disconnect(self.main_window.on_shipment_cell_changed)
-            except (TypeError, RuntimeError):
-                pass
-            self.main_window.shipment_table.setSortingEnabled(False)
-            try:
-                # Очищаем кэш собранных товаров перед обновлением таблицы
-                self._clear_allocated_qty_cache()
+except (TypeError, RuntimeError):
+            pass
+        self.main_window.shipment_table.setSortingEnabled(False)
+        
+        # Явно очищаем все виджеты кнопок перед сбросом строк
+        for row in range(self.main_window.shipment_table.rowCount()):
+            for col in range(self.main_window.shipment_table.columnCount()):
+                widget = self.main_window.shipment_table.cellWidget(row, col)
+                if widget:
+                    widget.deleteLater()
+        
+        try:
+            # Очищаем кэш собранных товаров перед обновлением таблицы
+            self._clear_allocated_qty_cache()
                 
                 # Проверка на существование текущей поставки
                 if not self.main_window.current_shipment:
@@ -1278,10 +1286,11 @@ class UIUpdater:
                     # Создаем виджет с кнопкой "+" и полем ввода количества
                     action_widget = QWidget(self.main_window.shipment_table)
                     action_widget.setAutoFillBackground(False)
-                    action_widget.setStyleSheet("background-color: transparent;")
+                    action_widget.setStyleSheet("background-color: transparent; border: none;")
                     action_layout = QHBoxLayout(action_widget)
-                    action_layout.setContentsMargins(0, 0, 0, 0)
-                    action_layout.setSpacing(2)
+                    action_layout.setContentsMargins(4, 2, 4, 2)
+                    action_layout.setSpacing(3)
+                    action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
                     # Кнопка "+"
                     add_btn = QPushButton("+", action_widget)
@@ -1351,6 +1360,7 @@ QLineEdit:focus {{
                     # Валидатор только для чисел
                     validator = QRegularExpressionValidator(QRegularExpression("\\d+"))
                     qty_lineedit.setValidator(validator)
+                    qty_lineedit.setFixedWidth(35)  # Увеличиваем ширину для чисел
 
                     # Обработчик кнопки - используем lambda с явными аргументами для избежания проблем с замыканием
                     add_btn.clicked.connect(lambda checked, bc=barcode, le=qty_lineedit: self.main_window.add_all_remaining_to_box_by_barcode(bc, int(le.text()) if le.text().isdigit() else 1))
@@ -1360,6 +1370,9 @@ QLineEdit:focus {{
 
                     # Показываем виджет с кнопкой "+" всегда
                     self.main_window.shipment_table.setCellWidget(row, 6, action_widget)
+                    
+                    # Устанавливаем фиксированную ширину столбца 6
+                    self.main_window.shipment_table.setColumnWidth(6, 80)
                     
                     # Устанавливаем стиль кнопок в зависимости от состояния
                     is_disabled = item.remaining_qty <= 0 or barcode in self.main_window.current_shipment.removed_items
@@ -1657,6 +1670,13 @@ QLineEdit:focus {{
         """Сброс таблиц при выходе из режима групповой поставки"""
         name_visible = getattr(self.main_window, 'name_column_visible', False)
         self.main_window.shipment_table.setColumnHidden(2, not name_visible)
+        # Восстанавливаем стандартное количество колонок (7)
+        if self.main_window.shipment_table.columnCount() != 7:
+            self.main_window.shipment_table.setColumnCount(7)
+            self.main_window.shipment_table.setHorizontalHeaderLabels(["Штрихкод", "Артикул", "Имя", "Всего", "Осталось", "Склад", ""])
+        
+        # Очищаем все виджеты кнопок из таблицы
+        self.main_window.shipment_table.setRowCount(0)
 
     def update_group_shipment_boxes_table(self, group_shipment):
         """Обновление таблицы коробок для групповой поставки"""
@@ -1680,12 +1700,20 @@ QLineEdit:focus {{
         """)
 
     def update_group_shipment_items_table(self, group_shipment):
-        """Обновление таблицы товаров для групповой поставки с суммированием"""
+        """Обновление таблицы товаров для групповой поставки в формате Google Sheets"""
         try:
             self.main_window.shipment_table.cellChanged.disconnect(self.main_window.on_shipment_cell_changed)
         except (TypeError, RuntimeError):
             pass
         self.main_window.shipment_table.setSortingEnabled(False)
+        
+        # Явно очищаем все виджеты кнопок перед сбросом строк
+        for row in range(self.main_window.shipment_table.rowCount()):
+            for col in range(self.main_window.shipment_table.columnCount()):
+                widget = self.main_window.shipment_table.cellWidget(row, col)
+                if widget:
+                    widget.deleteLater()
+        
         self.main_window.shipment_table.setRowCount(0)
         self.main_window.shipment_table.setUpdatesEnabled(False)
 
@@ -1693,63 +1721,116 @@ QLineEdit:focus {{
 
         theme = themes.THEMES.get(self.main_window.current_theme, themes.THEMES["Светлая"])
 
-        aggregated = {}
-        shipment_for_sku = {}
-        for shipment in group_shipment.sub_shipments.values():
+        # Собираем все уникальные штрихкоды и направления
+        all_barcodes = set()
+        directions = set()
+        shipment_data = {}
+        
+        for sub_name, shipment in group_shipment.sub_shipments.items():
+            display_name = getattr(shipment, 'display_name', sub_name.split('::')[-1] if '::' in sub_name else sub_name)
+            directions.add((display_name, shipment))
+            
             for barcode, item in shipment.shipment_items.items():
-                if barcode not in aggregated:
-                    aggregated[barcode] = {
+                all_barcodes.add(barcode)
+                if barcode not in shipment_data:
+                    shipment_data[barcode] = {
+                        'sku': item.sku,
                         'total_qty': 0,
-                        'allocated_qty': 0
+                        'allocated_qty': 0,
+                        'by_direction': {}
                     }
-                    shipment_for_sku[barcode] = item.sku
-                aggregated[barcode]['total_qty'] += item.total_qty
-                aggregated[barcode]['allocated_qty'] += item.allocated_qty
+                shipment_data[barcode]['by_direction'][display_name] = item.total_qty
+                shipment_data[barcode]['total_qty'] += item.total_qty
+                shipment_data[barcode]['allocated_qty'] += item.allocated_qty
 
-        barcodes = list(aggregated.keys())
-        product_names = {}
-        try:
-            from database import get_product_names_by_barcodes
-            product_names = get_product_names_by_barcodes(barcodes)
-        except:
-            pass
+        # Сортируем направления
+        sorted_directions = sorted(directions, key=lambda x: x[0])
+        
+        # Создаём заголовки: Штрихкод, Артикул, Имя, Направления..., Всего, Собрало, Осталось
+        num_direction_cols = len(sorted_directions)
+        num_total_cols = 3 + num_direction_cols + 3  # штрихкод + артикул + имя + направления + всего + собрано + осталось
+        
+        self.main_window.shipment_table.setColumnCount(num_total_cols)
+        
+        # Разбиваем длинные названия на строки для компактности
+        def split_header(text):
+            if len(text) > 10:
+                # Разбиваем по пробелам или дефисам
+                parts = text.replace('-', ' ').split()
+                if len(parts) > 1:
+                    return '\n'.join(parts)
+                # Или просто каждые 5 символов
+                return '\n'.join([text[i:i+5] for i in range(0, len(text), 5)])
+            return text
+        
+        headers = ["Штрихкод", "Артикул", "Имя"] + [split_header(d[0]) for d in sorted_directions] + ["Всего", "Собрано", "Осталось"]
+        self.main_window.shipment_table.setHorizontalHeaderLabels(headers)
+        
+        # Устанавливаем минимальную ширину для колонок направлений (только цифры)
+        header = self.main_window.shipment_table.horizontalHeader()
+        for col_idx in range(3, 3 + num_direction_cols):
+            header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Interactive)
+            self.main_window.shipment_table.setColumnWidth(col_idx, 70)
+        
+        # Включаем перенос текста в заголовках
+        header.setStyleSheet("QHeaderView::section { padding: 4px; }")
 
+        # Заполняем данные
         row = 0
-        for barcode in sorted(aggregated.keys()):
-            data = aggregated[barcode]
-            sku = shipment_for_sku.get(barcode, "")
-            name = product_names.get(barcode, "")
+        for barcode in sorted(all_barcodes):
+            data = shipment_data[barcode]
             self.main_window.shipment_table.insertRow(row)
 
-            remaining = data['total_qty'] - data['allocated_qty']
-
+            # Штрихкод
             barcode_item = QTableWidgetItem(barcode)
             self.main_window.shipment_table.setItem(row, 0, barcode_item)
 
-            sku_item = QTableWidgetItem(sku)
+            # Артикул
+            sku_item = QTableWidgetItem(data['sku'])
             self.main_window.shipment_table.setItem(row, 1, sku_item)
 
+            # Имя товара (из БД)
+            try:
+                from database import get_product_names_by_barcodes
+                product_names = get_product_names_by_barcodes([barcode])
+                name = product_names.get(barcode, "")
+            except:
+                name = ""
             name_item = QTableWidgetItem(name)
             self.main_window.shipment_table.setItem(row, 2, name_item)
 
+            # Направления
+            for col_idx, (dir_name, _) in enumerate(sorted_directions):
+                qty = data['by_direction'].get(dir_name, 0)
+                dir_item = QTableWidgetItem(str(qty) if qty > 0 else "")
+                dir_item.setData(Qt.ItemDataRole.DisplayRole, qty)
+                dir_item.setData(Qt.ItemDataRole.EditRole, qty)
+                self.main_window.shipment_table.setItem(row, 3 + col_idx, dir_item)
+
+            # Всего
+            total_col = 3 + num_direction_cols
             total_item = QTableWidgetItem()
             total_item.setData(Qt.ItemDataRole.DisplayRole, data['total_qty'])
             total_item.setData(Qt.ItemDataRole.EditRole, data['total_qty'])
-            self.main_window.shipment_table.setItem(row, 3, total_item)
+            self.main_window.shipment_table.setItem(row, total_col, total_item)
 
+            # Собрало
+            allocated_col = total_col + 1
             allocated_item = QTableWidgetItem()
             allocated_item.setData(Qt.ItemDataRole.DisplayRole, data['allocated_qty'])
             allocated_item.setData(Qt.ItemDataRole.EditRole, data['allocated_qty'])
-            self.main_window.shipment_table.setItem(row, 4, allocated_item)
+            self.main_window.shipment_table.setItem(row, allocated_col, allocated_item)
 
+            # Осталось
+            remaining_col = allocated_col + 1
+            remaining = data['total_qty'] - data['allocated_qty']
             remaining_item = QTableWidgetItem()
             remaining_item.setData(Qt.ItemDataRole.DisplayRole, remaining)
             remaining_item.setData(Qt.ItemDataRole.EditRole, remaining)
-            self.main_window.shipment_table.setItem(row, 5, remaining_item)
+            self.main_window.shipment_table.setItem(row, remaining_col, remaining_item)
 
-            self.main_window.shipment_table.setItem(row, 6, QTableWidgetItem(""))
-
-            for col in range(7):
+            # Применяем тему
+            for col in range(num_total_cols):
                 item_widget = self.main_window.shipment_table.item(row, col)
                 if item_widget:
                     item_widget.setForeground(QColor(theme["text"].name()))

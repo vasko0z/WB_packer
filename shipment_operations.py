@@ -142,6 +142,92 @@ class ShipmentOperations:
             # Сбрасываем флаг после завершения операции
             self._creating_shipment_in_progress = False
     
+    def update_group_shipment_from_google_sheets_data(self, result):
+        """Обновление групповой поставки из данных Google Sheets"""
+        df = result['df']
+        barcode_col = result['barcode_col']
+        sheet_name = result['sheet_name']
+        group_shipment = result['group_shipment']
+        
+        # Определяем колонку артикула
+        sku_col = None
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if 'артикул' in col_lower or 'арт' in col_lower or 'sku' in col_lower:
+                sku_col = col
+                break
+        
+        # Определяем колонки поставок (все колонки после штрихкода/артикула)
+        skip_cols = 2
+        if len(df.columns) > 3:
+            third_col = df.columns[2]
+            sample_val = df[third_col].dropna().iloc[0] if len(df[third_col].dropna()) > 0 else None
+            if sample_val is not None:
+                try:
+                    float(str(sample_val).replace(',', '.').strip())
+                except (ValueError, TypeError):
+                    skip_cols = 3
+        
+        quantity_cols = list(df.columns[skip_cols:])
+        
+        if not quantity_cols:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self.main_window, "Предупреждение", "Не найдены колонки поставок")
+            return
+        
+        # Очищаем старые подпоставки
+        for sub_name in list(group_shipment.sub_shipments.keys()):
+            del group_shipment.sub_shipments[sub_name]
+        
+        # Создаём новые подпоставки для каждой колонки
+        for qty_col in quantity_cols:
+            sub_name = str(qty_col).strip()
+            if len(sub_name) > 50:
+                sub_name = sub_name[:50] + "..."
+            if not sub_name:
+                sub_name = f"Поставка {quantity_cols.index(qty_col) + 1}"
+            
+            sub_destination = f"{group_shipment.group_name}::{sub_name}"
+            
+            shipment = Shipment(sub_destination, self.main_window.font_size, self.main_window.label_font_size, self.main_window.current_theme)
+            shipment.original_destination_name = sub_destination
+            shipment.display_name = sub_name
+            
+            for _, row in df.iterrows():
+                barcode = str(row[barcode_col]).strip() if barcode_col in df.columns and pd.notna(row.get(barcode_col)) else None
+                if not barcode or barcode.lower() in ['nan', 'none', '']:
+                    continue
+                
+                barcode = barcode.replace(" ", "").replace("-", "").replace("\t", "")
+                
+                if not pd.notna(row.get(qty_col)):
+                    continue
+                
+                try:
+                    qty = int(float(row[qty_col]))
+                    if qty <= 0:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                
+                sku = ""
+                if sku_col and sku_col in df.columns and pd.notna(row.get(sku_col)):
+                    sku = str(row[sku_col]).strip()
+                
+                shipment.add_shipment_item(barcode, sku if sku else barcode, qty)
+            
+            if shipment.shipment_items:
+                group_shipment.add_sub_shipment(sub_destination, shipment)
+                self.main_window.shipment_manager.save_shipment(shipment)
+        
+        if group_shipment.sub_shipments:
+            self.main_window.group_shipments[group_shipment.group_name] = group_shipment
+            self.main_window.ui_updater.update_ui()
+            self.main_window.show_status(f"Групповая поставка '{sheet_name}' обновлена", 3000)
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self.main_window, "Предупреждение", "Не удалось импортировать товары")
+    
     def create_shipment_from_google_sheets_data(self, result):
         """Создание поставки из данных Google Sheets"""
         df = result['df']
@@ -150,7 +236,7 @@ class ShipmentOperations:
         sheet_name = result['sheet_name']
         
         if is_group:
-            self._create_group_shipment_from_df(df, barcode_col, sheet_name)
+            self._create_group_shipment_from_df(df, barcode_col, sheet_name, is_explicit_group=True)
         else:
             self._create_regular_shipment_from_df(df, barcode_col, sheet_name)
     
@@ -223,8 +309,15 @@ class ShipmentOperations:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self.main_window, "Предупреждение", "Не удалось импортировать товары из листа")
     
-    def _create_group_shipment_from_df(self, df, barcode_col, group_name):
-        """Создание групповой поставки из DataFrame"""
+    def _create_group_shipment_from_df(self, df, barcode_col, group_name, is_explicit_group=False):
+        """Создание групповой поставки из DataFrame
+        
+        Args:
+            df: DataFrame с данными
+            barcode_col: колонка штрихкодов
+            group_name: название группы
+            is_explicit_group: True если пользователь явно указал что это групповая поставка
+        """
         from models import GroupShipment
         
         # Определяем колонки с количеством (колонки поставок)
@@ -233,6 +326,23 @@ class ShipmentOperations:
             col_lower = str(col).lower().strip()
             if any(kw in col_lower for kw in ['количество', 'кол-во', 'qty', 'quantity']):
                 quantity_cols.append(col)
+        
+        # Если пользователь явно указал групповую поставку, но не найдены колонки с "количество"
+        # - берём все колонки после первых 2-3 (штрихкод, артикул, название)
+        if is_explicit_group and not quantity_cols:
+            # Пропускаем первые 2-3 колонки (штрихкод, артикул, возможно название)
+            skip_cols = 2
+            if len(df.columns) > 3:
+                # Проверяем 3-ю колонку - если это не числовая, пропускаем 3
+                third_col = df.columns[2]
+                sample_val = df[third_col].dropna().iloc[0] if len(df[third_col].dropna()) > 0 else None
+                if sample_val is not None:
+                    try:
+                        float(str(sample_val).replace(',', '.').strip())
+                    except (ValueError, TypeError):
+                        skip_cols = 3
+            
+            quantity_cols = list(df.columns[skip_cols:])
         
         if not quantity_cols:
             from PyQt6.QtWidgets import QMessageBox
@@ -285,12 +395,16 @@ class ShipmentOperations:
                 # Нормализуем штрихкод: убираем пробелы, дефисы, табуляции
                 barcode = barcode.replace(" ", "").replace("-", "").replace("\t", "")
                 
-                qty = 1
-                if pd.notna(row.get(qty_col)):
-                    try:
-                        qty = int(float(row[qty_col]))
-                    except (ValueError, TypeError):
-                        qty = 1
+                # Проверяем количество - если пустое, пропускаем этот товар для данной подпоставки
+                if not pd.notna(row.get(qty_col)):
+                    continue
+                
+                try:
+                    qty = int(float(row[qty_col]))
+                    if qty <= 0:
+                        continue
+                except (ValueError, TypeError):
+                    continue
                 
                 sku = ""
                 if sku_col and sku_col in df.columns and pd.notna(row.get(sku_col)):
@@ -300,10 +414,11 @@ class ShipmentOperations:
             
             if shipment.shipment_items:
                 group_shipment.add_sub_shipment(sub_destination, shipment)
+                # Сохраняем каждую подпоставку отдельно
+                self.main_window.shipment_manager.save_shipment(shipment)
         
         if group_shipment.sub_shipments:
             self.main_window.group_shipments[group_name] = group_shipment
-            self.main_window.shipment_manager.save_shipment(group_shipment)
             self.main_window.current_shipment = None
             self.main_window.ui_updater.update_ui()
             self.main_window.show_status(f"Групповая поставка '{group_name}' создана", 3000)

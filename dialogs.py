@@ -1334,3 +1334,91 @@ class BoxNumberDialog(QDialog):
     def get_new_number(self):
         """Получить введенный номер коробки"""
         return self.number_input.text().strip()
+
+
+class GoogleSheetsImportDialog(QDialog):
+    """
+    Диалог импорта из Google Sheets с выбором листа и опцией групповой поставки
+    """
+    
+    def __init__(self, sheet_names, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Импорт из Google Sheets")
+        self.setModal(True)
+        
+        layout = QVBoxLayout()
+        
+        # Выбор листа
+        layout.addWidget(QLabel("Выберите лист для импорта:"))
+        self.sheet_combo = QComboBox()
+        self.sheet_combo.addItems(sheet_names)
+        layout.addWidget(self.sheet_combo)
+        
+        # Галочка "Групповая поставка"
+        self.group_checkbox = QCheckBox("Групповая поставка (несколько городов/складов)")
+        self.group_checkbox.setChecked(False)
+        layout.addWidget(self.group_checkbox)
+        
+        # Подсказка
+        hint_label = QLabel("✓ Обычная поставка: одна колонка с количеством\n✓ Групповая: несколько колонок (по городам/складам)")
+        hint_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(hint_label)
+        
+        # Кнопки
+        buttons = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(self.accept)
+        buttons.addWidget(ok_btn)
+        cancel_btn = QPushButton("Отмена")
+        cancel_btn.clicked.connect(self.reject)
+        buttons.addWidget(cancel_btn)
+        layout.addLayout(buttons)
+        
+        self.setLayout(layout)
+    
+    def get_sheet_name(self):
+        return self.sheet_combo.currentText()
+    
+    def is_group_shipment(self):
+        return self.group_checkbox.isChecked()
+
+
+class GoogleSheetsUpdateDialog(QDialog):
+    """
+    Диалог обновления из Google Sheets с выбором листа
+    """
+    
+    def __init__(self, sheet_names, current_sheet=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Обновление из Google Sheets")
+        self.setModal(True)
+        
+        layout = QVBoxLayout()
+        
+        # Выбор листа
+        layout.addWidget(QLabel("Выберите лист для обновления:"))
+        self.sheet_combo = QComboBox()
+        self.sheet_combo.addItems(sheet_names)
+        if current_sheet and current_sheet in sheet_names:
+            self.sheet_combo.setCurrentText(current_sheet)
+        layout.addWidget(self.sheet_combo)
+        
+        # Подсказка
+        hint_label = QLabel("⚠️ Все текущие данные в подпоставках будут заменены")
+        hint_label.setStyleSheet("color: orange; font-size: 11px;")
+        layout.addWidget(hint_label)
+        
+        # Кнопки
+        buttons = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(self.accept)
+        buttons.addWidget(ok_btn)
+        cancel_btn = QPushButton("Отмена")
+        cancel_btn.clicked.connect(self.reject)
+        buttons.addWidget(cancel_btn)
+        layout.addLayout(buttons)
+        
+        self.setLayout(layout)
+    
+    def get_sheet_name(self):
+        return self.sheet_combo.currentText()

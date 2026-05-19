@@ -19,7 +19,7 @@ import config
 import themes
 import utils
 from models import Shipment, ShipmentItem, Box, GroupShipment, ShipmentProperties
-from dialogs import UserManagerDialog, SettingsDialog, DestinationDialog, RenameDialog, ShipmentPropertiesDialog, ArchiveDialog, QuantityEditDialog, GroupShipmentPropertiesDialog
+from dialogs import GoogleSheetsImportDialog, SettingsDialog, DestinationDialog, RenameDialog, ShipmentPropertiesDialog, ArchiveDialog, QuantityEditDialog, GroupShipmentPropertiesDialog, GoogleSheetsUpdateDialog
 from db_settings_dialog import DatabaseSettingsDialog
 from shipment_manager import ShipmentManager
 from shipment_operations import ShipmentOperations
@@ -2075,6 +2075,121 @@ class MainWindow(QMainWindow):
         Тип поставки определяется автоматически по структуре файла Excel"""
         self.shipment_operations.start_new_shipment()
 
+    def update_group_shipment_from_google_sheets(self, group_shipment):
+        """Обновление групповой поставки из Google Sheets"""
+        try:
+            import gspread
+            from google.oauth2.service_account import Credentials
+        except ImportError:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Ошибка", "Установите gspread: pip install gspread google-auth")
+            return
+        
+        import os
+        credentials_path = os.path.join(os.path.dirname(__file__), "e-object-470910-p6-3500f3ddbdd3.json")
+        if not os.path.exists(credentials_path):
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Ошибка", f"Файл credentials не найден: {credentials_path}")
+            return
+        
+        try:
+            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+            creds = Credentials.from_service_account_file(credentials_path, scopes=scope)
+            client = gspread.authorize(creds)
+            
+            # ID таблицы поставок
+            spreadsheet_id = "1OGgsS0T4qaEekJgEkVTplZfoeQ7MeMth8o8eJTqnJGA"
+            spreadsheet = client.open_by_key(spreadsheet_id)
+            
+            # Получаем список листов
+            worksheets = spreadsheet.worksheets()
+            if not worksheets:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Ошибка", "Таблица не содержит листов")
+                return
+            
+            sheet_names = [ws.title for ws in worksheets]
+            
+            # Показываем диалог выбора листа
+            dialog = GoogleSheetsUpdateDialog(sheet_names, group_shipment.group_name, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            
+            sheet_name = dialog.get_sheet_name()
+            
+            # Запускаем асинхронное обновление
+            self.show_busy_progress(f"Обновление группы '{sheet_name}'...")
+            self.logger.info(f"Запуск обновления групповой поставки из Google Sheets: {sheet_name}")
+            
+            self.async_manager.execute_async(
+                self._update_group_shipment_from_sheet_worker,
+                callback=self._on_update_group_shipment_finished,
+                error_callback=self._on_update_group_shipment_error,
+                spreadsheet=spreadsheet,
+                sheet_name=sheet_name,
+                group_shipment=group_shipment
+            )
+        except Exception as e:
+            self.logger.error(f"Ошибка при обновлении из Google Sheets: {e}", exc_info=True)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при обновлении из Google Sheets:\n{e}")
+
+    def _update_group_shipment_from_sheet_worker(self, spreadsheet, sheet_name, group_shipment):
+        """Worker для обновления групповой поставки из Google Sheets"""
+        import pandas as pd
+        
+        worksheet = spreadsheet.worksheet(sheet_name)
+        all_values = worksheet.get_all_values()
+        
+        if not all_values or len(all_values) < 2:
+            raise ValueError(f"Лист '{sheet_name}' пуст")
+        
+        # Находим строку заголовков
+        header_row_idx = 0
+        for i, row in enumerate(all_values[:10]):
+            row_lower = [str(cell).lower() for cell in row]
+            if any('штрихкод' in cell or 'шк' in cell or 'barcode' in cell for cell in row_lower):
+                header_row_idx = i
+                break
+        
+        headers = all_values[header_row_idx]
+        data_rows = all_values[header_row_idx + 1:]
+        
+        if not data_rows:
+            raise ValueError(f"Лист '{sheet_name}' не содержит данных")
+        
+        df = pd.DataFrame(data_rows, columns=headers)
+        
+        # Определяем колонку штрихкодов
+        barcode_col = None
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if 'штрихкод' in col_lower or 'шк' in col_lower or 'barcode' in col_lower:
+                barcode_col = col
+                break
+        
+        if barcode_col is None:
+            barcode_col = df.columns[0]
+        
+        return {
+            'df': df,
+            'barcode_col': barcode_col,
+            'sheet_name': sheet_name,
+            'group_shipment': group_shipment
+        }
+
+    def _on_update_group_shipment_finished(self, result):
+        """Обработка успешного обновления групповой поставки"""
+        self.hide_progress(f"Группа '{result['sheet_name']}' обновлена", 3000)
+        self.shipment_operations.update_group_shipment_from_google_sheets_data(result)
+
+    def _on_update_group_shipment_error(self, error_msg):
+        """Обработка ошибки обновления"""
+        self.hide_progress("Ошибка обновления", 3000)
+        self.logger.error(f"Ошибка обновления из Google Sheets: {error_msg}")
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.critical(self, "Ошибка", f"Ошибка обновления из Google Sheets:\n{error_msg}")
+
     def import_shipment_from_google_sheets(self):
         """Импорт поставки из Google Sheets"""
         try:
@@ -2108,35 +2223,34 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Ошибка", "Таблица не содержит листов")
                 return
             
-            # Показываем диалог выбора листа
-            from PyQt6.QtWidgets import QInputDialog
             sheet_names = [ws.title for ws in worksheets]
-            sheet_name, ok = QInputDialog.getItem(
-                self, "Выбор листа",
-                "Выберите лист для импорта поставки:",
-                sheet_names, 0, False
-            )
             
-            if not ok or not sheet_name:
+            # Показываем диалог выбора листа с опцией групповой поставки
+            dialog = GoogleSheetsImportDialog(sheet_names, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
+            
+            sheet_name = dialog.get_sheet_name()
+            is_group = dialog.is_group_shipment()
             
             # Запускаем асинхронный импорт
             self.show_busy_progress(f"Импорт поставки '{sheet_name}'...")
-            self.logger.info(f"Запуск импорта поставки из Google Sheets: {sheet_name}")
+            self.logger.info(f"Запуск импорта поставки из Google Sheets: {sheet_name} (групповая={is_group})")
             
             self.async_manager.execute_async(
                 self._import_shipment_from_sheet_worker,
                 callback=self._on_import_shipment_finished,
                 error_callback=self._on_import_shipment_error,
                 spreadsheet=spreadsheet,
-                sheet_name=sheet_name
+                sheet_name=sheet_name,
+                is_group=is_group
             )
         except Exception as e:
             self.logger.error(f"Ошибка при импорте из Google Sheets: {e}", exc_info=True)
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Ошибка", f"Ошибка при импорте из Google Sheets:\n{e}")
 
-    def _import_shipment_from_sheet_worker(self, spreadsheet, sheet_name):
+    def _import_shipment_from_sheet_worker(self, spreadsheet, sheet_name, is_group=None):
         """Worker для импорта поставки из Google Sheets в фоновом потоке"""
         import pandas as pd
         from io import StringIO
@@ -2181,19 +2295,37 @@ class MainWindow(QMainWindow):
         if barcode_col is None:
             raise ValueError("Не найдена колонка со штрихкодами")
         
-        # Определяем тип поставки (одиночная или групповая)
-        significant_columns = [col for col in df.columns if str(col).strip() and not str(col).startswith('Unnamed')]
-        quantity_cols = [col for col in significant_columns 
-                        if any(kw in str(col).lower() for kw in ['количество', 'кол-во', 'qty', 'quantity'])]
-        
-        is_group = len(quantity_cols) > 1 or len(significant_columns) > 4
+        # Если пользователь явно указал тип поставки - используем это
+        if is_group is not None:
+            pass  # Используем значение от пользователя
+        else:
+            # Авто-определение (для обратной совместимости)
+            significant_columns = [col for col in df.columns if str(col).strip() and not str(col).startswith('Unnamed')]
+            quantity_cols = [col for col in significant_columns 
+                            if any(kw in str(col).lower() for kw in ['количество', 'кол-во', 'qty', 'quantity'])]
+            
+            is_group = len(quantity_cols) > 1 or len(significant_columns) > 4
+            
+            # Дополнительная проверка: считаем колонки с числовыми данными после первых 2-3 колонок
+            if not is_group and len(significant_columns) > 3:
+                numeric_cols = 0
+                for col in significant_columns[2:]:
+                    sample_val = df[col].dropna().iloc[0] if len(df[col].dropna()) > 0 else None
+                    if sample_val is not None:
+                        try:
+                            float(str(sample_val).replace(',', '.').strip())
+                            numeric_cols += 1
+                        except (ValueError, TypeError):
+                            pass
+                if numeric_cols > 1:
+                    is_group = True
+                    self.logger.info(f"Обнаружена групповая поставка: {numeric_cols} колонок с числами")
         
         return {
             'sheet_name': sheet_name,
             'df': df,
             'barcode_col': barcode_col,
             'is_group': is_group,
-            'significant_columns': significant_columns,
         }
 
     def _on_import_shipment_finished(self, result):
@@ -2463,6 +2595,12 @@ class MainWindow(QMainWindow):
         if group_shipment and not shipment and not box:  # Это групповая поставка
             self.current_shipment = None
             self.expand_current_shipment_collapse_others(group_shipment)
+            
+            # Скрываем центральную панель при групповой поставке
+            self.current_box_label.hide()
+            self.current_box_table.hide()
+            self.scan_input.hide()
+            
             self.ui_updater.update_group_shipment_summary(group_shipment)
             self.ui_updater.update_group_shipment_boxes_table(group_shipment)
             self.ui_updater.update_group_shipment_items_table(group_shipment)
@@ -2474,6 +2612,11 @@ class MainWindow(QMainWindow):
             shipment.current_box_index = -1
 
             self.expand_current_shipment_collapse_others(shipment)
+            
+            # Показываем центральную панель при обычной поставке
+            self.current_box_label.show()
+            self.current_box_table.show()
+            self.scan_input.show()
 
             hide_completed = getattr(shipment, 'hide_completed_items', self.hide_completed_items_setting)
             self.hide_completed_checkbox.blockSignals(True)
@@ -2507,6 +2650,11 @@ class MainWindow(QMainWindow):
                 shipment.current_box_index = -1
 
             self.expand_current_shipment_collapse_others(shipment)
+            
+            # Показываем центральную панель при обычной поставке
+            self.current_box_label.show()
+            self.current_box_table.show()
+            self.scan_input.show()
 
             hide_completed = getattr(shipment, 'hide_completed_items', self.hide_completed_items_setting)
             self.hide_completed_checkbox.blockSignals(True)
@@ -2865,6 +3013,7 @@ class MainWindow(QMainWindow):
                 menu.addSeparator()
 
                 update_group_action = menu.addAction("Обновить состав групповой поставки")
+                update_gsheets_action = menu.addAction("Обновить из Google Sheets")
                 export_all_action = menu.addAction("Экспорт всех коробок")
                 rename_group_action = menu.addAction("Переименовать группу")
                 delete_group_action = menu.addAction("Удалить группу")
@@ -2879,6 +3028,8 @@ class MainWindow(QMainWindow):
                 action = menu.exec(action)
                 if action == update_group_action:
                     self.shipment_operations.update_group_shipment_composition(group_shipment)
+                elif action == update_gsheets_action:
+                    self.update_group_shipment_from_google_sheets(group_shipment)
                 elif action == export_all_action:
                     self.shipment_manager.export_all_group_boxes(group_shipment)
                 elif action == rename_group_action:
@@ -3497,7 +3648,11 @@ class MainWindow(QMainWindow):
             raise ImportError("Установите gspread: pip install gspread google-auth")
         
         # Загрузка credentials из файла service account
-        credentials_path = os.path.join(os.path.dirname(__file__), "e-object-470910-p6-3500f3ddbdd3.json")
+        # При работе из EXE путь к файлу должен быть в папке с exe, а не во временной папке
+        if getattr(sys, 'frozen', False):
+            credentials_path = os.path.join(os.path.dirname(sys.executable), "e-object-470910-p6-3500f3ddbdd3.json")
+        else:
+            credentials_path = os.path.join(os.path.dirname(__file__), "e-object-470910-p6-3500f3ddbdd3.json")
         if not os.path.exists(credentials_path):
             raise FileNotFoundError(f"Файл credentials не найден: {credentials_path}")
         

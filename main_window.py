@@ -2596,10 +2596,10 @@ class MainWindow(QMainWindow):
             self.current_shipment = None
             self.expand_current_shipment_collapse_others(group_shipment)
             
-            # Скрываем центральную панель при групповой поставке
-            self.current_box_label.hide()
-            self.current_box_table.hide()
-            self.scan_input.hide()
+            # Скрываем центральную панель полностью
+            center_widget = self.main_splitter.widget(1)  # Центральный виджет
+            if center_widget:
+                center_widget.hide()
             
             self.ui_updater.update_group_shipment_summary(group_shipment)
             self.ui_updater.update_group_shipment_boxes_table(group_shipment)
@@ -2613,10 +2613,10 @@ class MainWindow(QMainWindow):
 
             self.expand_current_shipment_collapse_others(shipment)
             
-            # Показываем центральную панель при обычной поставке
-            self.current_box_label.show()
-            self.current_box_table.show()
-            self.scan_input.show()
+            # Показываем центральную панель
+            center_widget = self.main_splitter.widget(1)  # Центральный виджет
+            if center_widget:
+                center_widget.show()
 
             hide_completed = getattr(shipment, 'hide_completed_items', self.hide_completed_items_setting)
             self.hide_completed_checkbox.blockSignals(True)
@@ -2651,10 +2651,10 @@ class MainWindow(QMainWindow):
 
             self.expand_current_shipment_collapse_others(shipment)
             
-            # Показываем центральную панель при обычной поставке
-            self.current_box_label.show()
-            self.current_box_table.show()
-            self.scan_input.show()
+            # Показываем центральную панель
+            center_widget = self.main_splitter.widget(1)  # Центральный виджет
+            if center_widget:
+                center_widget.show()
 
             hide_completed = getattr(shipment, 'hide_completed_items', self.hide_completed_items_setting)
             self.hide_completed_checkbox.blockSignals(True)

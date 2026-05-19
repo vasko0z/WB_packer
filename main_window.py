@@ -3648,10 +3648,12 @@ class MainWindow(QMainWindow):
             raise ImportError("Установите gspread: pip install gspread google-auth")
         
         # Загрузка credentials из файла service account
-        # При работе из EXE путь к файлу должен быть в папке с exe, а не во временной папке
+        # При работе из EXE файл извлекается из встроенных ресурсов через _MEIPASS
         if getattr(sys, 'frozen', False):
-            credentials_path = os.path.join(os.path.dirname(sys.executable), "e-object-470910-p6-3500f3ddbdd3.json")
+            # В EXE: файл распаковывается во временную папку _MEIPASS
+            credentials_path = os.path.join(sys._MEIPASS, "e-object-470910-p6-3500f3ddbdd3.json")
         else:
+            # При разработке: файл рядом с исходным кодом
             credentials_path = os.path.join(os.path.dirname(__file__), "e-object-470910-p6-3500f3ddbdd3.json")
         if not os.path.exists(credentials_path):
             raise FileNotFoundError(f"Файл credentials не найден: {credentials_path}")

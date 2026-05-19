@@ -1092,213 +1092,212 @@ class UIUpdater:
 
             try:
                 self.main_window.shipment_table.cellChanged.disconnect(self.main_window.on_shipment_cell_changed)
-except (TypeError, RuntimeError):
-            pass
-        self.main_window.shipment_table.setSortingEnabled(False)
-        
-        # Явно очищаем все виджеты кнопок перед сбросом строк
-        for row in range(self.main_window.shipment_table.rowCount()):
-            for col in range(self.main_window.shipment_table.columnCount()):
-                widget = self.main_window.shipment_table.cellWidget(row, col)
-                if widget:
-                    widget.deleteLater()
-        
-        try:
+            except (TypeError, RuntimeError):
+                pass
+            self.main_window.shipment_table.setSortingEnabled(False)
+            
+            # Явно очищаем все виджеты кнопок перед сбросом строк
+            for row in range(self.main_window.shipment_table.rowCount()):
+                for col in range(self.main_window.shipment_table.columnCount()):
+                    widget = self.main_window.shipment_table.cellWidget(row, col)
+                    if widget:
+                        widget.deleteLater()
+            
             # Очищаем кэш собранных товаров перед обновлением таблицы
             self._clear_allocated_qty_cache()
-                
-                # Проверка на существование текущей поставки
-                if not self.main_window.current_shipment:
-                    current_item = self.main_window.shipments_tree_widget.currentItem()
-                    if current_item:
-                        group_shipment = current_item.data(0, Qt.ItemDataRole.UserRole + 2)
-                        if group_shipment:
-                            self.update_group_shipment_items_table(group_shipment)
-                            return
-                    self.main_window.shipment_table.setRowCount(0)
-                    # Также очищаем заголовок таблицы поставки
-                    self.main_window.shipment_table_label.setText("Состав поставки:")
-                    return
+            
+            # Проверка на существование текущей поставки
+            if not self.main_window.current_shipment:
+                current_item = self.main_window.shipments_tree_widget.currentItem()
+                if current_item:
+                    group_shipment = current_item.data(0, Qt.ItemDataRole.UserRole + 2)
+                    if group_shipment:
+                        self.update_group_shipment_items_table(group_shipment)
+                        return
+                self.main_window.shipment_table.setRowCount(0)
+                # Также очищаем заголовок таблицы поставки
+                self.main_window.shipment_table_label.setText("Состав поставки:")
+                return
 
 
-                # Проверяем, включена ли интеграция с МойСклад (ГЛОБАЛЬНАЯ настройка)
-                moysklad_enabled = database.get_moysklad_enabled()
-                
-                # Читаем видимость столбца из ТЕКУЩЕГО состояния чекбокса, а не из БД
-                stock_column_visible = getattr(self.main_window, 'stock_column_visible', True)
+            # Проверяем, включена ли интеграция с МойСклад (ГЛОБАЛЬНАЯ настройка)
+            moysklad_enabled = database.get_moysklad_enabled()
+            
+            # Читаем видимость столбца из ТЕКУЩЕГО состояния чекбокса, а не из БД
+            stock_column_visible = getattr(self.main_window, 'stock_column_visible', True)
 
-                shipment_items = list(self.main_window.current_shipment.shipment_items.values())
-                self.main_window.shipment_table.setRowCount(len(shipment_items))
-                
+            shipment_items = list(self.main_window.current_shipment.shipment_items.values())
+            self.main_window.shipment_table.setRowCount(len(shipment_items))
+            
 
-                # Получаем тему с проверкой
-                current_theme = getattr(self.main_window, 'current_theme', None)
-                if current_theme is None or current_theme not in themes.THEMES:
-                    logger.warning(f"Тема не установлена или некорректна: {current_theme}, используем Светлая")
-                    current_theme = "Светлая"
-                theme = themes.THEMES.get(current_theme, themes.THEMES["Светлая"])
+            # Получаем тему с проверкой
+            current_theme = getattr(self.main_window, 'current_theme', None)
+            if current_theme is None or current_theme not in themes.THEMES:
+                logger.warning(f"Тема не установлена или некорректна: {current_theme}, используем Светлая")
+                current_theme = "Светлая"
+            theme = themes.THEMES.get(current_theme, themes.THEMES["Светлая"])
 
-                logger.debug(f"update_shipment_table: тема={current_theme}, table_bg={theme['table_bg'].name()}, text={theme['text'].name()}, highlight={theme['highlight'].name()}")
+            logger.debug(f"update_shipment_table: тема={current_theme}, table_bg={theme['table_bg'].name()}, text={theme['text'].name()}, highlight={theme['highlight'].name()}")
 
-                # Отключаем обновления таблицы во время заполнения для повышения производительности
-                self.main_window.shipment_table.setUpdatesEnabled(False)
+            # Отключаем обновления таблицы во время заполнения для повышения производительности
+            self.main_window.shipment_table.setUpdatesEnabled(False)
 
-                # Обновляем заголовки таблицы с переданными настройками
-                self.update_shipment_table_headers(moysklad_enabled, stock_column_visible)
+            # Обновляем заголовки таблицы с переданными настройками
+            self.update_shipment_table_headers(moysklad_enabled, stock_column_visible)
 
-                # Получаем кэшированные остатки, не обновляя их автоматически при переключении поставок
-                stock_quantities = {}
-                # Инициализируем product_names для второго блока
+            # Получаем кэшированные остатки, не обновляя их автоматически при переключении поставок
+            stock_quantities = {}
+            # Инициализируем product_names для второго блока
+            product_names = {}
+
+            # Получаем наименования товаров из базы
+            try:
+                barcodes = [item.barcode for item in shipment_items]
+                from database import get_product_names_by_barcodes
+                product_names = get_product_names_by_barcodes(barcodes)
+            except Exception as e:
+                logger.error(f"Ошибка при получении наименований: {e}")
                 product_names = {}
-
-                # Получаем наименования товаров из базы
+            if MOYSKLAD_API_AVAILABLE and moysklad_enabled:
                 try:
-                    barcodes = [item.barcode for item in shipment_items]
-                    from database import get_product_names_by_barcodes
-                    product_names = get_product_names_by_barcodes(barcodes)
-                except Exception as e:
-                    logger.error(f"Ошибка при получении наименований: {e}")
-                    product_names = {}
-                if MOYSKLAD_API_AVAILABLE and moysklad_enabled:
-                    try:
-                        # Используем кэшированные остатки из базы данных без автоматического обновления при переключении поставок
-                        for item in shipment_items:
-                            # Сначала пробуем получить из локального кэша
-                            from get_stock_quantity_for_item import stock_cache
-                            cached_qty = stock_cache.get_cached_quantity(item.barcode)
-                            if cached_qty is not None:
-                                stock_quantities[item.barcode] = cached_qty
+                    # Используем кэшированные остатки из базы данных без автоматического обновления при переключении поставок
+                    for item in shipment_items:
+                        # Сначала пробуем получить из локального кэша
+                        from get_stock_quantity_for_item import stock_cache
+                        cached_qty = stock_cache.get_cached_quantity(item.barcode)
+                        if cached_qty is not None:
+                            stock_quantities[item.barcode] = cached_qty
+                        else:
+                            # Если в локальном кэше нет, пробуем получить из базы данных
+                            db_qty = database.get_stock_cache(item.barcode)
+                            if db_qty is not None:
+                                stock_quantities[item.barcode] = db_qty
+                                # Также сохраняем в локальный кэш для ускорения последующих обращений
+                                stock_cache.set_cached_quantity(item.barcode, db_qty)
                             else:
-                                # Если в локальном кэше нет, пробуем получить из базы данных
-                                db_qty = database.get_stock_cache(item.barcode)
-                                if db_qty is not None:
-                                    stock_quantities[item.barcode] = db_qty
-                                    # Также сохраняем в локальный кэш для ускорения последующих обращений
-                                    stock_cache.set_cached_quantity(item.barcode, db_qty)
-                                else:
-                                    # Если остаток не закэширован нигде, устанавливаем 0
-                                    stock_quantities[item.barcode] = 0
-                    except Exception as e:
-                        logger.error(f"Ошибка при получении кэшированных остатков: {e}")
-                        # В случае ошибки, устанавливаем 0 для всех товаров
-                        for item in shipment_items:
-                            stock_quantities[item.barcode] = 0
+                                # Если остаток не закэширован нигде, устанавливаем 0
+                                stock_quantities[item.barcode] = 0
+                except Exception as e:
+                    logger.error(f"Ошибка при получении кэшированных остатков: {e}")
+                    # В случае ошибки, устанавливаем 0 для всех товаров
+                    for item in shipment_items:
+                        stock_quantities[item.barcode] = 0
 
-                logger.info(f"Начало цикла заполнения таблицы: {len(shipment_items)} товаров, stock_quantities keys={len(stock_quantities) if stock_quantities else 0}, moysklad_enabled={moysklad_enabled}, stock_column_visible={stock_column_visible}")
-                
-                # Оптимизация: предварительно рассчитываем все allocated_qty перед циклом
-                # Это избегает многократных переборов всех поставок и коробок для каждого товара
-                allocated_qty_cache = {}
-                for item in shipment_items:
-                    allocated_qty_cache[item.barcode] = self.get_total_allocated_qty(item.barcode)
-                
-                for row, item in enumerate(shipment_items):
-                    remaining_qty = item.remaining_qty
-                    barcode_item = QTableWidgetItem(item.barcode)
-                    sku_item = QTableWidgetItem(item.sku)
-                    total_qty_item = QTableWidgetItem(str(item.total_qty))
-                    remaining_item = QTableWidgetItem(str(remaining_qty))
+            logger.info(f"Начало цикла заполнения таблицы: {len(shipment_items)} товаров, stock_quantities keys={len(stock_quantities) if stock_quantities else 0}, moysklad_enabled={moysklad_enabled}, stock_column_visible={stock_column_visible}")
+            
+            # Оптимизация: предварительно рассчитываем все allocated_qty перед циклом
+            # Это избегает многократных переборов всех поставок и коробок для каждого товара
+            allocated_qty_cache = {}
+            for item in shipment_items:
+                allocated_qty_cache[item.barcode] = self.get_total_allocated_qty(item.barcode)
+            
+            for row, item in enumerate(shipment_items):
+                remaining_qty = item.remaining_qty
+                barcode_item = QTableWidgetItem(item.barcode)
+                sku_item = QTableWidgetItem(item.sku)
+                total_qty_item = QTableWidgetItem(str(item.total_qty))
+                remaining_item = QTableWidgetItem(str(remaining_qty))
 
-                    # Получаем остаток из заранее загруженных данных
-                    stock_qty = stock_quantities.get(item.barcode, 0) if stock_quantities else 0
-                    # Вычитаем количество уже собранных товаров (используем предварительно рассчитанный кэш)
-                    total_allocated = allocated_qty_cache.get(item.barcode, 0)
-                    stock_qty -= total_allocated
-                    stock_item = QTableWidgetItem(str(stock_qty))
-                    stock_item.setFlags(stock_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                # Получаем остаток из заранее загруженных данных
+                stock_qty = stock_quantities.get(item.barcode, 0) if stock_quantities else 0
+                # Вычитаем количество уже собранных товаров (используем предварительно рассчитанный кэш)
+                total_allocated = allocated_qty_cache.get(item.barcode, 0)
+                stock_qty -= total_allocated
+                stock_item = QTableWidgetItem(str(stock_qty))
+                stock_item.setFlags(stock_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
-                    # Раскрашиваем число в столбце "На складе": синий если > 0, красный если <= 0
-                    if stock_qty > 0:
-                        stock_item.setForeground(COLOR_STOCK_POSITIVE)  # Синий
-                    else:
-                        stock_item.setForeground(COLOR_STOCK_NEGATIVE)  # Красный
+                # Раскрашиваем число в столбце "На складе": синий если > 0, красный если <= 0
+                if stock_qty > 0:
+                    stock_item.setForeground(COLOR_STOCK_POSITIVE)  # Синий
+                else:
+                    stock_item.setForeground(COLOR_STOCK_NEGATIVE)  # Красный
 
-                    # Получаем наименование товара
-                    product_name = product_names.get(item.barcode, "")
-                    # Если наименование не найдено, используем артикул как резервный вариант
+                # Получаем наименование товара
+                product_name = product_names.get(item.barcode, "")
+                # Если наименование не найдено, используем артикул как резервный вариант
+                if not product_name:
+                    product_name = item.sku
+                    # Если и артикул пустой, используем штрихкод
                     if not product_name:
-                        product_name = item.sku
-                        # Если и артикул пустой, используем штрихкод
-                        if not product_name:
-                            product_name = item.barcode
-                    name_item = QTableWidgetItem(product_name)
-                    name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    
-                    barcode_item.setFlags(barcode_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    sku_item.setFlags(sku_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    total_qty_item.setFlags(total_qty_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    remaining_item.setFlags(remaining_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    stock_item.setFlags(stock_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    
-                    # Устанавливаем высоту строк в таблице поставки (не менее 28px для кнопок)
-                    font_height = self.main_window.shipment_table.fontMetrics().height()
-                    self.main_window.shipment_table.setRowHeight(row, max(TABLE_ROW_HEIGHT_MIN, font_height + TABLE_ROW_HEIGHT_PADDING))
+                        product_name = item.barcode
+                name_item = QTableWidgetItem(product_name)
+                name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                
+                barcode_item.setFlags(barcode_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                sku_item.setFlags(sku_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                total_qty_item.setFlags(total_qty_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                remaining_item.setFlags(remaining_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                stock_item.setFlags(stock_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                
+                # Устанавливаем высоту строк в таблице поставки (не менее 28px для кнопок)
+                font_height = self.main_window.shipment_table.fontMetrics().height()
+                self.main_window.shipment_table.setRowHeight(row, max(TABLE_ROW_HEIGHT_MIN, font_height + TABLE_ROW_HEIGHT_PADDING))
 
-                    # Устанавливаем цвета только для текста - фон будет чередоваться автоматически
+                # Устанавливаем цвета только для текста - фон будет чередоваться автоматически
+                for table_item in [barcode_item, sku_item, name_item, total_qty_item, remaining_item, stock_item]:
+                    table_item.setForeground(theme["text"])
+
+                # Устанавливаем специальный фон ТОЛЬКО для строк с особыми состояниями
+                if item.barcode in self.main_window.current_shipment.removed_items:
+                    removed_color = theme["removed_from_shipment"]
+                    removed_text = theme["removed_text"]
                     for table_item in [barcode_item, sku_item, name_item, total_qty_item, remaining_item, stock_item]:
-                        table_item.setForeground(theme["text"])
+                        table_item.setBackground(removed_color)
+                        table_item.setForeground(removed_text)
 
-                    # Устанавливаем специальный фон ТОЛЬКО для строк с особыми состояниями
-                    if item.barcode in self.main_window.current_shipment.removed_items:
-                        removed_color = theme["removed_from_shipment"]
-                        removed_text = theme["removed_text"]
-                        for table_item in [barcode_item, sku_item, name_item, total_qty_item, remaining_item, stock_item]:
-                            table_item.setBackground(removed_color)
-                            table_item.setForeground(removed_text)
+                elif item.remaining_qty < 0:
+                    conflict_color = theme["conflict_exceed"]
+                    conflict_text = theme["conflict_text"]
+                    for table_item in [barcode_item, sku_item, name_item, total_qty_item, remaining_item, stock_item]:
+                        table_item.setBackground(conflict_color)
+                        table_item.setForeground(conflict_text)
 
-                    elif item.remaining_qty < 0:
-                        conflict_color = theme["conflict_exceed"]
-                        conflict_text = theme["conflict_text"]
-                        for table_item in [barcode_item, sku_item, name_item, total_qty_item, remaining_item, stock_item]:
-                            table_item.setBackground(conflict_color)
-                            table_item.setForeground(conflict_text)
+                elif item.remaining_qty == 0:
+                    completed_bg = theme["shipment_remaining_ok"]
+                    completed_text = theme["shipment_text_ok"]
 
-                    elif item.remaining_qty == 0:
-                        completed_bg = theme["shipment_remaining_ok"]
-                        completed_text = theme["shipment_text_ok"]
+                    for table_item in [barcode_item, sku_item, name_item, total_qty_item, remaining_item, stock_item]:
+                        table_item.setBackground(completed_bg)
+                        table_item.setForeground(completed_text)
 
-                        for table_item in [barcode_item, sku_item, name_item, total_qty_item, remaining_item, stock_item]:
-                            table_item.setBackground(completed_bg)
-                            table_item.setForeground(completed_text)
+                elif item.remaining_qty > 0 and item.remaining_qty < item.total_qty:
+                    partial_bg = theme["shipment_remaining_partial"]
+                    partial_text = theme["shipment_text_partial"]
 
-                    elif item.remaining_qty > 0 and item.remaining_qty < item.total_qty:
-                        partial_bg = theme["shipment_remaining_partial"]
-                        partial_text = theme["shipment_text_partial"]
+                    for table_item in [barcode_item, sku_item, name_item, remaining_item, stock_item]:
+                        table_item.setBackground(partial_bg)
+                        table_item.setForeground(partial_text)
+                # Для остальных строк фон не устанавливаем - будет работать чередование
 
-                        for table_item in [barcode_item, sku_item, name_item, remaining_item, stock_item]:
-                            table_item.setBackground(partial_bg)
-                            table_item.setForeground(partial_text)
-                    # Для остальных строк фон не устанавливаем - будет работать чередование
+                # Размещение данных в таблице поставки
+                # Порядок столбцов: 0=Штрихкод | 1=Артикул | 2=Наименование | 3=Всего | 4=Осталось | 5=На складе
+                self.main_window.shipment_table.setItem(row, 0, barcode_item)      # Штрихкод
+                self.main_window.shipment_table.setItem(row, 1, sku_item)          # Артикул
+                self.main_window.shipment_table.setItem(row, 2, name_item)         # Наименование
+                self.main_window.shipment_table.setItem(row, 3, total_qty_item)    # Всего
+                self.main_window.shipment_table.setItem(row, 4, remaining_item)    # Осталось
 
-                    # Размещение данных в таблице поставки
-                    # Порядок столбцов: 0=Штрихкод | 1=Артикул | 2=Наименование | 3=Всего | 4=Осталось | 5=На складе
-                    self.main_window.shipment_table.setItem(row, 0, barcode_item)      # Штрихкод
-                    self.main_window.shipment_table.setItem(row, 1, sku_item)          # Артикул
-                    self.main_window.shipment_table.setItem(row, 2, name_item)         # Наименование
-                    self.main_window.shipment_table.setItem(row, 3, total_qty_item)    # Всего
-                    self.main_window.shipment_table.setItem(row, 4, remaining_item)    # Осталось
+                # Всегда устанавливаем stock_item в таблицу (даже если МойСклад отключен)
+                self.main_window.shipment_table.setItem(row, 5, stock_item)    # На складе
 
-                    # Всегда устанавливаем stock_item в таблицу (даже если МойСклад отключен)
-                    self.main_window.shipment_table.setItem(row, 5, stock_item)    # На складе
+                barcode = item.barcode
 
-                    barcode = item.barcode
+                # Создаем виджет с кнопкой "+" и полем ввода количества
+                action_widget = QWidget(self.main_window.shipment_table)
+                action_widget.setAutoFillBackground(False)
+                action_widget.setStyleSheet("background-color: transparent; border: none;")
+                action_layout = QHBoxLayout(action_widget)
+                action_layout.setContentsMargins(4, 2, 4, 2)
+                action_layout.setSpacing(3)
+                action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-                    # Создаем виджет с кнопкой "+" и полем ввода количества
-                    action_widget = QWidget(self.main_window.shipment_table)
-                    action_widget.setAutoFillBackground(False)
-                    action_widget.setStyleSheet("background-color: transparent; border: none;")
-                    action_layout = QHBoxLayout(action_widget)
-                    action_layout.setContentsMargins(4, 2, 4, 2)
-                    action_layout.setSpacing(3)
-                    action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                # Кнопка "+"
+                add_btn = QPushButton("+", action_widget)
+                add_btn.setFixedSize(16, 16)
+                add_btn.setMinimumHeight(16)
+                add_btn.setMaximumHeight(16)
 
-                    # Кнопка "+"
-                    add_btn = QPushButton("+", action_widget)
-                    add_btn.setFixedSize(16, 16)
-                    add_btn.setMinimumHeight(16)
-                    add_btn.setMaximumHeight(16)
-
-                    add_btn.setStyleSheet(f"""
+                add_btn.setStyleSheet(f"""
 QPushButton {{
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
         stop: 0 {theme["accent_success"].lighter(120).name()},
@@ -1335,15 +1334,15 @@ QPushButton:hover {{
     height: 16px;
 }}
 """)
-                    add_btn.setToolTip("Добавить указанное количество в коробку")
+                add_btn.setToolTip("Добавить указанное количество в коробку")
 
-                    # Поле ввода количества
-                    qty_lineedit = QLineEdit(action_widget)
-                    qty_lineedit.setFixedWidth(QTY_INPUT_WIDTH)
-                    qty_lineedit.setText(str(max(1, int(item.remaining_qty))))
-                    qty_lineedit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    qty_lineedit.setToolTip("Количество для добавления")
-                    qty_lineedit.setStyleSheet(f"""
+                # Поле ввода количества
+                qty_lineedit = QLineEdit(action_widget)
+                qty_lineedit.setFixedWidth(QTY_INPUT_WIDTH)
+                qty_lineedit.setText(str(max(1, int(item.remaining_qty))))
+                qty_lineedit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                qty_lineedit.setToolTip("Количество для добавления")
+                qty_lineedit.setStyleSheet(f"""
 QLineEdit {{
     border: 1px solid {theme["button_border"].name()};
     padding: 1px;
@@ -1357,53 +1356,53 @@ QLineEdit:focus {{
 }}
 """)
 
-                    # Валидатор только для чисел
-                    validator = QRegularExpressionValidator(QRegularExpression("\\d+"))
-                    qty_lineedit.setValidator(validator)
-                    qty_lineedit.setFixedWidth(35)  # Увеличиваем ширину для чисел
+                # Валидатор только для чисел
+                validator = QRegularExpressionValidator(QRegularExpression("\\d+"))
+                qty_lineedit.setValidator(validator)
+                qty_lineedit.setFixedWidth(35)  # Увеличиваем ширину для чисел
 
-                    # Обработчик кнопки - используем lambda с явными аргументами для избежания проблем с замыканием
-                    add_btn.clicked.connect(lambda checked, bc=barcode, le=qty_lineedit: self.main_window.add_all_remaining_to_box_by_barcode(bc, int(le.text()) if le.text().isdigit() else 1))
+                # Обработчик кнопки - используем lambda с явными аргументами для избежания проблем с замыканием
+                add_btn.clicked.connect(lambda checked, bc=barcode, le=qty_lineedit: self.main_window.add_all_remaining_to_box_by_barcode(bc, int(le.text()) if le.text().isdigit() else 1))
 
-                    action_layout.addWidget(add_btn)
-                    action_layout.addWidget(qty_lineedit)
+                action_layout.addWidget(add_btn)
+                action_layout.addWidget(qty_lineedit)
 
-                    # Показываем виджет с кнопкой "+" всегда
-                    self.main_window.shipment_table.setCellWidget(row, 6, action_widget)
-                    
-                    # Устанавливаем фиксированную ширину столбца 6
-                    self.main_window.shipment_table.setColumnWidth(6, 80)
-                    
-                    # Устанавливаем стиль кнопок в зависимости от состояния
-                    is_disabled = item.remaining_qty <= 0 or barcode in self.main_window.current_shipment.removed_items
-                    if is_disabled:
-                        add_btn.setEnabled(False)
-                        qty_lineedit.setEnabled(False)
-                    else:
-                        add_btn.setEnabled(True)
-                        qty_lineedit.setEnabled(True)
-
-                # Настройка видимости столбцов - один раз после цикла
-                if moysklad_enabled:
-                    self.main_window.shipment_table.setColumnHidden(5, not stock_column_visible)
+                # Показываем виджет с кнопкой "+" всегда
+                self.main_window.shipment_table.setCellWidget(row, 6, action_widget)
+                
+                # Устанавливаем фиксированную ширину столбца 6
+                self.main_window.shipment_table.setColumnWidth(6, 80)
+                
+                # Устанавливаем стиль кнопок в зависимости от состояния
+                is_disabled = item.remaining_qty <= 0 or barcode in self.main_window.current_shipment.removed_items
+                if is_disabled:
+                    add_btn.setEnabled(False)
+                    qty_lineedit.setEnabled(False)
                 else:
-                    self.main_window.shipment_table.setColumnHidden(5, True)
-                # Столбец с кнопками всегда видим
-                self.main_window.shipment_table.setColumnHidden(6, False)
-                # Устанавливаем ширину столбца с кнопками
-                self.main_window.shipment_table.setColumnWidth(6, ACTION_COLUMN_WIDTH)
+                    add_btn.setEnabled(True)
+                    qty_lineedit.setEnabled(True)
 
-                self.main_window.shipment_table.setUpdatesEnabled(True)
+            # Настройка видимости столбцов - один раз после цикла
+            if moysklad_enabled:
+                self.main_window.shipment_table.setColumnHidden(5, not stock_column_visible)
+            else:
+                self.main_window.shipment_table.setColumnHidden(5, True)
+            # Столбец с кнопками всегда видим
+            self.main_window.shipment_table.setColumnHidden(6, False)
+            # Устанавливаем ширину столбца с кнопками
+            self.main_window.shipment_table.setColumnWidth(6, ACTION_COLUMN_WIDTH)
 
-                # Применяем скрытие строк ДО включения сортировки, чтобы индексы строк совпадали
-                self.update_shipment_table_rows_visibility()
-            finally:
-                # Включаем сортировку после всех обновлений для возможности сортировки по столбцам
-                # Но сбрасываем индикатор сортировки, чтобы сохранить исходный порядок строк
-                self.main_window.shipment_table.setSortingEnabled(True)
-                self.main_window.shipment_table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
-                self.main_window.shipment_table.cellChanged.connect(self.main_window.on_shipment_cell_changed)
-            
+            self.main_window.shipment_table.setUpdatesEnabled(True)
+
+            # Применяем скрытие строк ДО включения сортировки, чтобы индексы строк совпадали
+            self.update_shipment_table_rows_visibility()
+
+            # Включаем сортировку после всех обновлений для возможности сортировки по столбцам
+            # Но сбрасываем индикатор сортировки, чтобы сохранить исходный порядок строк
+            self.main_window.shipment_table.setSortingEnabled(True)
+            self.main_window.shipment_table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
+            self.main_window.shipment_table.cellChanged.connect(self.main_window.on_shipment_cell_changed)
+
             # Восстанавливаем сохраненные пользовательские настройки ширины столбцов
             if (hasattr(self.main_window, 'shipment_columns_width') and
                 self.main_window.shipment_columns_width):
@@ -1422,12 +1421,12 @@ QLineEdit:focus {{
                 # Если нет сохраненных настроек, используем авто-размер
                 self.main_window.shipment_table.resizeColumnsToContents()
             
-            # Принудительно устанавливаем ширину столбца 6 с кнопками, т.к. resizeColumnsToContents не учитывает виджеты
-            self.main_window.shipment_table.setColumnWidth(6, ACTION_COLUMN_WIDTH)
-            # Не скрываем и не показываем столбец 6 здесь - видимость уже установлена выше
+                # Принудительно устанавливаем ширину столбца 6 с кнопками, т.к. resizeColumnsToContents не учитывает виджеты
+                self.main_window.shipment_table.setColumnWidth(6, ACTION_COLUMN_WIDTH)
+                # Не скрываем и не показываем столбец 6 здесь - видимость уже установлена выше
 
-            # Устанавливаем фиксированный режим для вертикального заголовка, чтобы сохранить нашу высоту строк
-            self.main_window.shipment_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+                # Устанавливаем фиксированный режим для вертикального заголовка, чтобы сохранить нашу высоту строк
+                self.main_window.shipment_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         except Exception as e:
             logger.error(f"КРИТИЧЕСКАЯ ОШИБКА в update_shipment_table: {e}")
             logger.error(traceback.format_exc())

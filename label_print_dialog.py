@@ -218,17 +218,22 @@ def _print_pdf_fallback(pdf_path, use_acrobat=False):
                            pass
                    QMessageBox.critical(None, "Ошибка", f"Не удалось распечатать этикетку: {str(e)}\n\nПопробуйте установить PDF-ридер (например, Adobe Reader) как приложение по умолчанию для PDF файлов.")
                    return False
-           except Exception as e:
-               # Если основной метод с win32api завершился с ошибкой, проверяем тип ошибки
-               error_msg = str(e)
-               if "ShellExecute вернул ошибку: 31" in error_msg:  # ERROR_GEN_FAILURE - "Присоединенное устройство не работает"
-                   # Вместо открытия файла для ручной печати, просто показываем ошибку
-                   QMessageBox.critical(None, "Ошибка печати", f"Принтер недоступен. Не удалось распечатать файл: {os.path.basename(abs_pdf_path)}")
-                   return False
-               else:
-                   # Для других ошибок сообщаем пользователю
-                   QMessageBox.critical(None, "Ошибка печати", f"Не удалось отправить файл на печать: {str(e)}")
-                   return False
+            except Exception as e:
+                # Извлекаем код ошибки из исключения (pywintypes.error имеет структуру (code, func, msg))
+                error_code = None
+                if hasattr(e, 'winerror'):
+                    error_code = e.winerror
+                elif isinstance(e, tuple) and len(e) >= 1:
+                    error_code = e[0]
+                elif hasattr(e, 'args') and isinstance(e.args, tuple) and len(e.args) >= 1:
+                    error_code = e.args[0]
+                
+                if error_code == 31:  # ERROR_GEN_FAILURE - Принтер недоступен
+                    QMessageBox.critical(None, "Ошибка печати", f"Принтер недоступен или не работает. Не удалось распечатать файл: {os.path.basename(abs_pdf_path)}")
+                    return False
+                else:
+                    QMessageBox.critical(None, "Ошибка печати", f"Не удалось отправить файл на печать: {str(e)}")
+                    return False
     elif sys.platform.startswith('darwin'):
         # Для macOS используем системную команду печати
         try:

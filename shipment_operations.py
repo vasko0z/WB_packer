@@ -328,21 +328,22 @@ class ShipmentOperations:
                 quantity_cols.append(col)
         
         # Если пользователь явно указал групповую поставку, но не найдены колонки с "количество"
-        # - берём все колонки после первых 2-3 (штрихкод, артикул, название)
+        # - берём все колонки после первых 2 (штрихкод, артикул), которые содержат числовые данные
         if is_explicit_group and not quantity_cols:
-            # Пропускаем первые 2-3 колонки (штрихкод, артикул, возможно название)
-            skip_cols = 2
-            if len(df.columns) > 3:
-                # Проверяем 3-ю колонку - если это не числовая, пропускаем 3
-                third_col = df.columns[2]
-                sample_val = df[third_col].dropna().iloc[0] if len(df[third_col].dropna()) > 0 else None
-                if sample_val is not None:
+            # Пропускаем первые 2 колонки (штрихкод, артикул)
+            # Все остальные колонки - это города с количествами
+            for col in df.columns[2:]:
+                # Проверяем данные внутри колонки, а не заголовок
+                sample_vals = df[col].dropna()
+                if len(sample_vals) > 0:
+                    # Берём первое непустое значение
+                    sample_val = sample_vals.iloc[0]
                     try:
                         float(str(sample_val).replace(',', '.').strip())
+                        quantity_cols.append(col)
                     except (ValueError, TypeError):
-                        skip_cols = 3
-            
-            quantity_cols = list(df.columns[skip_cols:])
+                        # Колонка не содержит числовых данных - пропускаем
+                        pass
         
         if not quantity_cols:
             from PyQt6.QtWidgets import QMessageBox

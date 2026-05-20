@@ -3711,6 +3711,7 @@ class MainWindow(QMainWindow):
         records_to_insert = []
         records_with_labels = 0
         skipped_empty_barcode = 0
+        seen_barcodes = {}  # Для дедупликации: barcode -> (article, name)
         
         for row in all_values[1:]:  # Пропускаем заголовок
             if not row or len(row) <= barcode_idx:
@@ -3729,12 +3730,16 @@ class MainWindow(QMainWindow):
                 skipped_empty_barcode += 1
                 continue
             
+            # Дедупликация: последняя запись побеждает
+            seen_barcodes[barcode] = (article if article else None, name if name else None)
+        
+        # Преобразуем в список для вставки
+        for barcode, (article, name) in seen_barcodes.items():
             if name and name.lower() not in ('nan', 'none', ''):
                 records_with_labels += 1
-            
-            records_to_insert.append((barcode, article if article else None, name if name else None))
+            records_to_insert.append((barcode, article, name))
         
-        self.logger.info(f"[SKU] Подготовлено {len(records_to_insert)} записей ({records_with_labels} с именами): {time.time()-t0:.2f}s")
+        self.logger.info(f"[SKU] Подготовлено {len(records_to_insert)} записей ({records_with_labels} с именами, дедупликация из {len(all_values)-1} строк): {time.time()-t0:.2f}s")
         
         if not records_to_insert:
             raise ValueError("Нет валидных записей для обновления SKU")
@@ -3752,14 +3757,21 @@ class MainWindow(QMainWindow):
                     records_to_insert
                 )
             else:
-                import psycopg2.extras
+                from db_connection import psycopg, psycopg2
                 cursor.execute("DELETE FROM sku")
-                psycopg2.extras.execute_values(
-                    cursor,
-                    "INSERT INTO sku (barcode, article, name) VALUES %s ON CONFLICT (barcode) DO UPDATE SET article = EXCLUDED.article, name = EXCLUDED.name",
-                    records_to_insert,
-                    page_size=1000
-                )
+                if psycopg is not None:
+                    cursor.executemany(
+                        "INSERT INTO sku (barcode, article, name) VALUES (%s, %s, %s) ON CONFLICT (barcode) DO UPDATE SET article = EXCLUDED.article, name = EXCLUDED.name",
+                        records_to_insert
+                    )
+                else:
+                    import psycopg2.extras
+                    psycopg2.extras.execute_values(
+                        cursor,
+                        "INSERT INTO sku (barcode, article, name) VALUES %s ON CONFLICT (barcode) DO UPDATE SET article = EXCLUDED.article, name = EXCLUDED.name",
+                        records_to_insert,
+                        page_size=1000
+                    )
             
             conn.commit()
             self.logger.info(f"[SKU] Вставка завершена: {time.time()-t0:.2f}s")

@@ -309,41 +309,84 @@ class DatabaseConnection:
             return self._sqlite_conn
         else:
             # Для PostgreSQL берем из пула
-            try:
-                if psycopg is not None:
-                    # psycopg3
-                    conn = self.connection_pool.getconn()
-                    # Сбрасываем любое незавершённое состояние транзакции
-                    try:
-                        if conn.pq.status == psycopg.pq.TransactionStatus.INTRANS:
-                            conn.rollback()
-                    except Exception:
-                        pass
-                    # Устанавливаем параметры сессии (таймауты) из конфигурации
-                    with conn.cursor() as cur:
-                        cur.execute(f"SET statement_timeout TO {getattr(config, 'POSTGRESQL_STATEMENT_TIMEOUT', 30000)}")
-                        cur.execute(f"SET idle_in_transaction_session_timeout TO {getattr(config, 'POSTGRESQL_IDLE_TIMEOUT', 60000)}")
-                    return conn
-                else:
-                    # psycopg2
-                    with self._pool_lock:
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    if psycopg is not None:
+                        # psycopg3
                         conn = self.connection_pool.getconn()
-                    # Сбрасываем любое незавершённое состояние транзакции
+                        # Проверяем, живо ли соединение
+                        if conn.closed:
+                            logger.debug("Соединение закрыто, получаем новое")
+                            continue
+                        # Сбрасываем любое незавершённое состояние транзакции
+                        try:
+                            if conn.pq.status == psycopg.pq.TransactionStatus.INTRANS:
+                                conn.rollback()
+                        except Exception:
+                            pass
+                        # Проверяем соединение простым запросом
+                        try:
+                            with conn.cursor() as cur:
+                                cur.execute("SELECT 1")
+                        except Exception:
+                            # Соединение невалидно, закрываем и пробуем снова
+                            logger.debug("Соединение невалидно, получаем новое")
+                            try:
+                                conn.close()
+                            except Exception:
+                                pass
+                            continue
+                        # Устанавливаем параметры сессии (таймауты) из конфигурации
+                        with conn.cursor() as cur:
+                            cur.execute(f"SET statement_timeout TO {getattr(config, 'POSTGRESQL_STATEMENT_TIMEOUT', 30000)}")
+                            cur.execute(f"SET idle_in_transaction_session_timeout TO {getattr(config, 'POSTGRESQL_IDLE_TIMEOUT', 60000)}")
+                        return conn
+                    else:
+                        # psycopg2
+                        with self._pool_lock:
+                            conn = self.connection_pool.getconn()
+                        # Проверяем, живо ли соединение
+                        if conn.closed:
+                            logger.debug("Соединение закрыто, получаем новое")
+                            continue
+                        # Сбрасываем любое незавершённое состояние транзакции
+                        try:
+                            if hasattr(conn, 'status') and conn.status == 2:  # 2 = INTRANS
+                                conn.rollback()
+                        except Exception:
+                            pass
+                        # Проверяем соединение простым запросом
+                        try:
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT 1")
+                            cursor.close()
+                        except Exception:
+                            # Соединение невалидно, закрываем и пробуем снова
+                            logger.debug("Соединение невалидно, получаем новое")
+                            try:
+                                conn.close()
+                            except Exception:
+                                pass
+                            continue
+                        conn.set_client_encoding('UTF8')
+                        cursor = conn.cursor()
+                        # Используем таймауты из конфигурации
+                        cursor.execute(f"SET statement_timeout TO {getattr(config, 'POSTGRESQL_STATEMENT_TIMEOUT', 30000)}")
+                        cursor.execute(f"SET idle_in_transaction_session_timeout TO {getattr(config, 'POSTGRESQL_IDLE_TIMEOUT', 60000)}")
+                        cursor.close()
+                        return conn
+                except Exception as e:
+                    logger.error(f"Ошибка получения соединения из пула (попытка {attempt + 1}): {e}", exc_info=True)
+                    if attempt == max_retries - 1:
+                        raise
+                    # Закрываем пул и пересоздаем
                     try:
-                        if hasattr(conn, 'status') and conn.status == 2:  # 2 = INTRANS
-                            conn.rollback()
+                        self.close_all_connections()
                     except Exception:
                         pass
-                    conn.set_client_encoding('UTF8')
-                    cursor = conn.cursor()
-                    # Используем таймауты из конфигурации
-                    cursor.execute(f"SET statement_timeout TO {getattr(config, 'POSTGRESQL_STATEMENT_TIMEOUT', 30000)}")
-                    cursor.execute(f"SET idle_in_transaction_session_timeout TO {getattr(config, 'POSTGRESQL_IDLE_TIMEOUT', 60000)}")
-                    cursor.close()
-                    return conn
-            except Exception as e:
-                logger.error(f"Ошибка получения соединения из пула: {e}", exc_info=True)
-                raise
+                    self._initialize_connection_pool()
+            raise Exception("Не удалось получить валидное соединение после нескольких попыток")
 
     def return_connection(self, conn):
         """Возвращает соединение в пул"""
@@ -493,101 +536,132 @@ def execute_query(query, params=None, fetch=False, fetchone=False, fetchall=Fals
     """
     global _current_db_type
 
-    conn = get_connection()
-    db_type = DatabaseConnection.get_instance().db_type
+    max_retries = 2
+    last_error = None
+    
+    for attempt in range(max_retries):
+        conn = get_connection()
+        db_type = DatabaseConnection.get_instance().db_type
 
-    try:
-        # Определяем тип базы данных и адаптируем запрос
-        if db_type == "sqlite":
-            # Для SQLite используем ? вместо %s
-            sqlite_query = query.replace("%s", "?")
-
-            # Преобразуем параметры в кортеж
-            if params is None:
-                params = ()
-            elif not isinstance(params, (tuple, list)):
-                params = (params,)
-
-            cursor = conn.cursor()
-            cursor.execute(sqlite_query, params)
-
-            if fetchall:
-                # Преобразуем sqlite3.Row в кортежи для совместимости
-                result = [tuple(row) for row in cursor.fetchall()]
-            elif fetchone:
-                row = cursor.fetchone()
-                result = tuple(row) if row else None
-            elif fetch:
-                # Преобразуем sqlite3.Row в кортежи для совместимости
-                result = [tuple(row) for row in cursor.fetchall()]
-            else:
-                result = None
-
-            # Фиксируем только для модифицирующих запросов или если явно указано
-            if auto_commit is True or (auto_commit is None and not query.strip().upper().startswith('SELECT')):
-                conn.commit()
-            return result
-        else:
-            # PostgreSQL
-            # psycopg2 нативно поддерживает UTF-8, избыточное кодирование не требуется
-            # Преобразуем параметры в кортеж если нужно
-            if params and not isinstance(params, tuple):
-                params = tuple(params)
-
-            cursor = conn.cursor()
-
-            # Convert placeholder to PostgreSQL-style %s
-            query = query.replace("?", "%s")
-
-            cursor.execute(query, params)
-
-            if fetchall:
-                result = cursor.fetchall()
-            elif fetchone:
-                result = cursor.fetchone()
-            elif fetch:
-                result = cursor.fetchall()
-            else:
-                result = None
-
-            # Фиксируем только для модифицирующих запросов или если явно указано
-            # Это ИЗБЕГАЕТ лишнего commit() для SELECT запросов
-            if auto_commit is True or (auto_commit is None and not query.strip().upper().startswith('SELECT')):
-                conn.commit()
-            return result
-
-    except Exception as e:
-        logger.error(f"Ошибка выполнения запроса ({db_type}): {e}", exc_info=True)
         try:
-            if db_type == "sqlite" or not conn.closed:
-                conn.rollback()
-        except Exception:
-            pass
-        raise
-    finally:
-        # Завершаем транзакцию перед возвратом соединения в пул
-        # Используем rollback для безопасности (не повредит данным SELECT)
-        try:
+            # Определяем тип базы данных и адаптируем запрос
             if db_type == "sqlite":
-                pass  # SQLite не требует проверки
-            elif psycopg is not None:
-                # psycopg3
+                # Для SQLite используем ? вместо %s
+                sqlite_query = query.replace("%s", "?")
+
+                # Преобразуем параметры в кортеж
+                if params is None:
+                    params = ()
+                elif not isinstance(params, (tuple, list)):
+                    params = (params,)
+
+                cursor = conn.cursor()
+                cursor.execute(sqlite_query, params)
+
+                if fetchall:
+                    # Преобразуем sqlite3.Row в кортежи для совместимости
+                    result = [tuple(row) for row in cursor.fetchall()]
+                elif fetchone:
+                    row = cursor.fetchone()
+                    result = tuple(row) if row else None
+                elif fetch:
+                    # Преобразуем sqlite3.Row в кортежи для совместимости
+                    result = [tuple(row) for row in cursor.fetchall()]
+                else:
+                    result = None
+
+                # Фиксируем только для модифицирующих запросов или если явно указано
+                if auto_commit is True or (auto_commit is None and not query.strip().upper().startswith('SELECT')):
+                    conn.commit()
+                return result
+            else:
+                # PostgreSQL
+                # psycopg2 нативно поддерживает UTF-8, избыточное кодирование не требуется
+                # Преобразуем параметры в кортеж если нужно
+                if params and not isinstance(params, tuple):
+                    params = tuple(params)
+
+                cursor = conn.cursor()
+
+                # Convert placeholder to PostgreSQL-style %s
+                query = query.replace("?", "%s")
+
+                cursor.execute(query, params)
+
+                if fetchall:
+                    result = cursor.fetchall()
+                elif fetchone:
+                    result = cursor.fetchone()
+                elif fetch:
+                    result = cursor.fetchall()
+                else:
+                    result = None
+
+                # Фиксируем только для модифицирующих запросов или если явно указано
+                # Это ИЗБЕГАЕТ лишнего commit() для SELECT запросов
+                if auto_commit is True or (auto_commit is None and not query.strip().upper().startswith('SELECT')):
+                    conn.commit()
+                return result
+
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+            # Проверяем, является ли ошибка разрывом соединения
+            is_connection_error = any(keyword in error_str for keyword in [
+                'server closed the connection unexpectedly',
+                'consuming input failed',
+                'connection already closed',
+                'connection reset by peer',
+                'broken pipe',
+                'terminating connection',
+                'no connection to the server'
+            ])
+            
+            if is_connection_error and attempt < max_retries - 1:
+                logger.warning(f"Разрыв соединения (попытка {attempt + 1}/{max_retries}): {e}")
+                # Закрываем пул и пересоздаем
                 try:
-                    if not conn.closed and conn.pq.status == psycopg.pq.TransactionStatus.INTRANS:
+                    db_conn = DatabaseConnection.get_instance()
+                    db_conn.close_all_connections()
+                except Exception:
+                    pass
+                db_conn._initialize_connection_pool()
+                continue
+            else:
+                logger.error(f"Ошибка выполнения запроса ({db_type}): {e}", exc_info=True)
+                try:
+                    if db_type == "sqlite" or not conn.closed:
                         conn.rollback()
                 except Exception:
                     pass
-            elif psycopg2 is not None and hasattr(conn, 'status'):
-                # psycopg2
-                if not conn.closed and conn.status == psycopg2.extensions.INTRANS:
+                raise
+        finally:
+            # Завершаем транзакцию перед возвратом соединения в пул
+            # Используем rollback для безопасности (не повредит данным SELECT)
+            try:
+                if db_type == "sqlite":
+                    pass  # SQLite не требует проверки
+                elif psycopg is not None:
+                    # psycopg3
                     try:
-                        conn.rollback()
+                        if not conn.closed and conn.pq.status == psycopg.pq.TransactionStatus.INTRANS:
+                            conn.rollback()
                     except Exception:
                         pass
-        except Exception:
-            pass
-        # Возвращаем соединение в пул вместо закрытия
-        _release_connection(conn)
+                elif psycopg2 is not None and hasattr(conn, 'status'):
+                    # psycopg2
+                    if not conn.closed and conn.status == psycopg2.extensions.INTRANS:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            # Возвращаем соединение в пул вместо закрытия
+            _release_connection(conn)
+    
+    if last_error:
+        raise last_error
 
 
 def execute_many(query, params_list):
@@ -595,87 +669,98 @@ def execute_many(query, params_list):
     Выполняет массовые запросы к базе данных (PostgreSQL или SQLite)
     Автоматически определяет тип БД и адаптирует запрос
     """
-    conn = get_connection()
-    db_type = DatabaseConnection.get_instance().db_type
+    max_retries = 2
+    last_error = None
     
-    try:
-        if db_type == "sqlite":
-            # Для SQLite используем ? вместо %s
-            sqlite_query = query.replace("%s", "?")
-            
-            cursor = conn.cursor()
-            
-            if params_list:
-                # Обрабатываем параметры для SQLite
-                processed_params_list = []
-                for params in params_list:
-                    if isinstance(params, (list, tuple)):
-                        processed_params = tuple(params)
-                    else:
-                        processed_params = (params,)
-                    processed_params_list.append(processed_params)
-                
-                # Используем executemany для массового выполнения
-                cursor.executemany(sqlite_query, processed_params_list)
-            else:
-                cursor.execute(sqlite_query)
-            
-            conn.commit()
-            
-        else:
-            # PostgreSQL
-            # psycopg2 нативно поддерживает UTF-8, избыточное кодирование не требуется
-            cursor = conn.cursor()
-
-            # Convert placeholder to PostgreSQL-style %s if not already done
-            if "?" in query:
-                query = query.replace("?", "%s")
-
-            # Execute the query with proper parameter handling for PostgreSQL
-            if params_list:
-                for params in params_list:
-                    # Преобразуем параметры в кортеж
-                    if not isinstance(params, (tuple, list)):
-                        params = (params,)
-                    else:
-                        params = tuple(params)
-
-                    cursor.execute(query, params)
-            else:
-                cursor.execute(query)
-
-            conn.commit()
-            
-    except TypeError as e:
-        if "not all arguments converted during string formatting" in str(e):
-            logger.error(f"Ошибка форматирования параметров при выполнении массового запроса: {e}")
-            logger.error(f"Запрос: {query}")
-            logger.error(f"Список параметров: {params_list}")
-            try:
-                if db_type == "sqlite" or not conn.closed:
-                    conn.rollback()
-            except Exception:
-                pass
-            raise TypeError(f"Ошибка форматирования параметров при выполнении массового запроса: {str(e)}")
-        else:
-            logger.error(f"Ошибка выполнения массового запроса ({db_type}): {e}", exc_info=True)
-            try:
-                if db_type == "sqlite" or not conn.closed:
-                    conn.rollback()
-            except Exception:
-                pass
-            raise
-    except Exception as e:
-        logger.error(f"Ошибка выполнения массового запроса ({db_type}): {e}", exc_info=True)
+    for attempt in range(max_retries):
+        conn = get_connection()
+        db_type = DatabaseConnection.get_instance().db_type
+        
         try:
-            if db_type == "sqlite" or not conn.closed:
-                conn.rollback()
-        except Exception:
-            pass
-        raise
-    finally:
-        # Возвращаем соединение в пул вместо закрытия
-        _release_connection(conn)
+            if db_type == "sqlite":
+                # Для SQLite используем ? вместо %s
+                sqlite_query = query.replace("%s", "?")
+                
+                cursor = conn.cursor()
+                
+                if params_list:
+                    # Обрабатываем параметры для SQLite
+                    processed_params_list = []
+                    for params in params_list:
+                        if isinstance(params, (list, tuple)):
+                            processed_params = tuple(params)
+                        else:
+                            processed_params = (params,)
+                        processed_params_list.append(processed_params)
+                    
+                    # Используем executemany для массового выполнения
+                    cursor.executemany(sqlite_query, processed_params_list)
+                else:
+                    cursor.execute(sqlite_query)
+                
+                conn.commit()
+                
+            else:
+                # PostgreSQL
+                # psycopg2 нативно поддерживает UTF-8, избыточное кодирование не требуется
+                cursor = conn.cursor()
+
+                # Convert placeholder to PostgreSQL-style %s if not already done
+                if "?" in query:
+                    query = query.replace("?", "%s")
+
+                # Execute the query with proper parameter handling for PostgreSQL
+                if params_list:
+                    for params in params_list:
+                        # Преобразуем параметры в кортеж
+                        if not isinstance(params, (tuple, list)):
+                            params = (params,)
+                        else:
+                            params = tuple(params)
+
+                        cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
+
+                conn.commit()
+                
+            return  # Успех, выходим из цикла
+                
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+            is_connection_error = any(keyword in error_str for keyword in [
+                'server closed the connection unexpectedly',
+                'consuming input failed',
+                'connection already closed',
+                'connection reset by peer',
+                'broken pipe',
+                'terminating connection',
+                'no connection to the server'
+            ])
+            
+            if is_connection_error and attempt < max_retries - 1:
+                logger.warning(f"Разрыв соединения в execute_many (попытка {attempt + 1}/{max_retries}): {e}")
+                try:
+                    db_conn = DatabaseConnection.get_instance()
+                    db_conn.close_all_connections()
+                except Exception:
+                    pass
+                db_conn._initialize_connection_pool()
+                continue
+            else:
+                logger.error(f"Ошибка выполнения массового запроса ({db_type}): {e}", exc_info=True)
+                try:
+                    if db_type == "sqlite" or not conn.closed:
+                        conn.rollback()
+                except Exception:
+                    pass
+                raise
+        finally:
+            _release_connection(conn)
+    
+    if last_error:
+        raise last_error
 
 
 def execute_transaction(queries_with_params):
@@ -692,78 +777,105 @@ def execute_transaction(queries_with_params):
     Raises:
         Exception: Пробрасывает оригинальное исключение при ошибке
     """
-    conn = get_connection()
-    db_type = DatabaseConnection.get_instance().db_type
-    results = []
+    max_retries = 2
+    last_error = None
     
-    try:
-        # Определяем тип базы данных
-        use_sqlite = db_type == "sqlite"
+    for attempt in range(max_retries):
+        conn = get_connection()
+        db_type = DatabaseConnection.get_instance().db_type
+        results = []
         
-        if use_sqlite:
-            # Для SQLite отключаем автокоммит на время транзакции
-            # SQLite по умолчанию в режиме autocommit, управляем вручную
-            cursor = conn.cursor()
-            
-            for query, params in queries_with_params:
-                # Для SQLite используем ? вместо %s
-                sqlite_query = query.replace("%s", "?")
-                
-                # Преобразуем параметры в кортеж
-                if params is None:
-                    params = ()
-                elif not isinstance(params, (tuple, list)):
-                    params = (params,)
-                    
-                cursor.execute(sqlite_query, params)
-                
-                # Сохраняем результат если есть (для SELECT)
-                if cursor.description:
-                    results.append([tuple(row) for row in cursor.fetchall()])
-                else:
-                    results.append(None)
-            
-            # Коммитим транзакцию только если все запросы успешны
-            conn.commit()
-            
-        else:
-            # PostgreSQL
-            cursor = conn.cursor()
-
-            for query, params in queries_with_params:
-                # psycopg2 нативно поддерживает UTF-8, избыточное кодирование не требуется
-                # Преобразуем параметры в кортеж если нужно
-                if params and not isinstance(params, tuple):
-                    params = tuple(params)
-
-                # Convert placeholder to PostgreSQL-style %s
-                query = query.replace("?", "%s")
-
-                cursor.execute(query, params)
-
-                # Сохраняем результат если есть (для SELECT)
-                if cursor.description:
-                    results.append(cursor.fetchall())
-                else:
-                    results.append(None)
-
-            # Коммитим транзакцию только если все запросы успешны
-            conn.commit()
-        
-        return results
-        
-    except Exception as e:
-        # При любой ошибке откатываем всю транзакцию
-        logger.error(f"Ошибка транзакции ({db_type}): {e}", exc_info=True)
         try:
-            if use_sqlite or not conn.closed:
-                conn.rollback()
-        except Exception:
-            pass
-        raise
-    finally:
-        # Возвращаем соединение в пул
-        _release_connection(conn)
+            # Определяем тип базы данных
+            use_sqlite = db_type == "sqlite"
+            
+            if use_sqlite:
+                # Для SQLite отключаем автокоммит на время транзакции
+                # SQLite по умолчанию в режиме autocommit, управляем вручную
+                cursor = conn.cursor()
+                
+                for query, params in queries_with_params:
+                    # Для SQLite используем ? вместо %s
+                    sqlite_query = query.replace("%s", "?")
+                    
+                    # Преобразуем параметры в кортеж
+                    if params is None:
+                        params = ()
+                    elif not isinstance(params, (tuple, list)):
+                        params = (params,)
+                        
+                    cursor.execute(sqlite_query, params)
+                    
+                    # Сохраняем результат если есть (для SELECT)
+                    if cursor.description:
+                        results.append([tuple(row) for row in cursor.fetchall()])
+                    else:
+                        results.append(None)
+                
+                # Коммитим транзакцию только если все запросы успешны
+                conn.commit()
+                
+            else:
+                # PostgreSQL
+                cursor = conn.cursor()
+
+                for query, params in queries_with_params:
+                    # psycopg2 нативно поддерживает UTF-8, избыточное кодирование не требуется
+                    # Преобразуем параметры в кортеж если нужно
+                    if params and not isinstance(params, tuple):
+                        params = tuple(params)
+
+                    # Convert placeholder to PostgreSQL-style %s
+                    query = query.replace("?", "%s")
+
+                    cursor.execute(query, params)
+
+                    # Сохраняем результат если есть (для SELECT)
+                    if cursor.description:
+                        results.append(cursor.fetchall())
+                    else:
+                        results.append(None)
+
+                # Коммитим транзакцию только если все запросы успешны
+                conn.commit()
+            
+            return results
+            
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+            is_connection_error = any(keyword in error_str for keyword in [
+                'server closed the connection unexpectedly',
+                'consuming input failed',
+                'connection already closed',
+                'connection reset by peer',
+                'broken pipe',
+                'terminating connection',
+                'no connection to the server'
+            ])
+            
+            if is_connection_error and attempt < max_retries - 1:
+                logger.warning(f"Разрыв соединения в execute_transaction (попытка {attempt + 1}/{max_retries}): {e}")
+                try:
+                    db_conn = DatabaseConnection.get_instance()
+                    db_conn.close_all_connections()
+                except Exception:
+                    pass
+                db_conn._initialize_connection_pool()
+                continue
+            else:
+                logger.error(f"Ошибка транзакции ({db_type}): {e}", exc_info=True)
+                try:
+                    if use_sqlite or not conn.closed:
+                        conn.rollback()
+                except Exception:
+                    pass
+                raise
+        finally:
+            _release_connection(conn)
+    
+    if last_error:
+        raise last_error
 
 
 class DatabaseTransaction:
@@ -837,7 +949,28 @@ class DatabaseTransaction:
         if params and not isinstance(params, (tuple, list)):
             params = (params,)
         
-        self.cursor.execute(query, params)
+        try:
+            self.cursor.execute(query, params)
+        except Exception as e:
+            error_str = str(e).lower()
+            is_connection_error = any(keyword in error_str for keyword in [
+                'server closed the connection unexpectedly',
+                'consuming input failed',
+                'connection already closed',
+                'connection reset by peer',
+                'broken pipe',
+                'terminating connection',
+                'no connection to the server'
+            ])
+            if is_connection_error:
+                logger.warning(f"Разрыв соединения в DatabaseTransaction: {e}")
+                # Помечаем соединение как невалидное
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+            raise
+        
         return self.cursor
     
     def executemany(self, query, params_list):
@@ -855,7 +988,27 @@ class DatabaseTransaction:
         if self.db_type == "sqlite":
             query = query.replace("%s", "?")
         
-        self.cursor.executemany(query, params_list)
+        try:
+            self.cursor.executemany(query, params_list)
+        except Exception as e:
+            error_str = str(e).lower()
+            is_connection_error = any(keyword in error_str for keyword in [
+                'server closed the connection unexpectedly',
+                'consuming input failed',
+                'connection already closed',
+                'connection reset by peer',
+                'broken pipe',
+                'terminating connection',
+                'no connection to the server'
+            ])
+            if is_connection_error:
+                logger.warning(f"Разрыв соединения в DatabaseTransaction.executemany: {e}")
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+            raise
+        
         return self.cursor
     
     def fetchone(self):

@@ -50,6 +50,11 @@ for file_name in ['config.ini']:
     if file_path.exists():
         datas.append((str(file_path), '.'))
 
+# Добавляем credentials файл для Google Sheets (в корень bundle)
+credentials_file = base_dir / "e-object-470910-p6-3500f3ddbdd3.json"
+if credentials_file.exists():
+    datas.append((str(credentials_file), '.'))
+
 # Добавляем данные reportlab (шрифты и т.д.)
 try:
     reportlab_data = collect_data_files('reportlab')
@@ -169,6 +174,39 @@ a = Analysis(
         'PyQt6.QtTest', 'PyQt6.QtTextToSpeech',
         'PyQt6.QtXml', 'PyQt6.QtPdf', 'PyQt6.QtPdfWidgets',
         'PyQt6.QAxContainer', 'PyQt6.lupdate',
+        # Исключаем ML/AI библиотеки (не нужны для проекта)
+        'torch', 'torchvision', 'torchaudio',
+        'onnx', 'onnxruntime', 'onnx.reference',
+        'transformers', 'huggingface_hub', 'tokenizers',
+        'tensorflow', 'keras', 'scipy', 'sklearn', 'scikit-learn',
+        'sympy', 'networkx', 'optimum',
+        'mcp', 'starlette', 'uvicorn', 'fastapi',
+        'pydantic', 'pydantic_settings',
+        'jinja2', 'markupsafe',
+        'rich', 'pygments', 'markdown_it',
+        'aiohttp', 'httpx', 'httpcore', 'websockets',
+        'jsonschema', 'referencing', 'jsonschema_specifications',
+        'dns', 'dnspython',
+        'dotenv', 'python-dotenv',
+        'fsspec', 'orjson', 'annotated_doc',
+        'sse_starlette', 'multipart', 'python-multipart',
+        'win32com', 'pywin32', 'pywin',
+        'lxml', 'bs4', 'soupsieve',
+        'docx', 'python-docx',
+        'fitz', 'pymupdf',
+        'pytesseract',
+        'google.protobuf', 'protobuf',
+        'ml_dtypes',
+        'safetensors',
+        'einops',
+        'colorama',
+        'regex',
+        'tqdm',
+        'filelock',
+        'functorch',
+        'torchgen',
+        'sympy',
+        'mpmath',
     ],
     hookspath=[],
     hooksconfig={},

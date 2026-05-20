@@ -11,7 +11,7 @@ from datetime import datetime
 VERSION_MAJOR = 1
 VERSION_MINOR = 0
 VERSION_PATCH = 0
-VERSION_BUILD = 79  # Увеличивать на 1 при каждой компиляции
+VERSION_BUILD = 80  # Увеличивать на 1 при каждой компиляции
 
 
 def get_version_file_path():

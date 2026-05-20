@@ -114,7 +114,6 @@ def _print_pdf_fallback(pdf_path, use_acrobat=False):
     """
     Резервный метод печати PDF файла на случай, если PyMuPDF недоступен.
     """
-    # Проверяем существование файла
     if not os.path.exists(pdf_path):
         QMessageBox.critical(None, "Ошибка", f"PDF файл не найден: {pdf_path}")
         return False
@@ -122,118 +121,57 @@ def _print_pdf_fallback(pdf_path, use_acrobat=False):
     abs_pdf_path = os.path.abspath(pdf_path)
     
     if sys.platform.startswith('win'):
-        # Для Windows пробуем несколько методов печати
+        # Метод 1: os.startfile с "print" - самый надёжный на Windows
+        try:
+            os.startfile(abs_pdf_path, "print")
+            return True
+        except OSError:
+            pass
         
-        if use_acrobat:
-            # Для печати с использованием Acrobat Reader
-            try:
-                # Пробуем использовать Adobe Reader для печати, если он установлен
-                adobe_paths = [
-                    r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
-                    r"C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
-                    r"C:\Program Files\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe"
-                ]
-                
-                for adobe_path in adobe_paths:
-                    if os.path.exists(adobe_path):
-                        import subprocess
-                        subprocess.run([adobe_path, "/t", abs_pdf_path])
-                        return True
-                        
-                # Если Adobe Reader не найден, используем ShellExecute как резервный вариант
+        # Метод 2: Пробуем известные PDF-ридеры с флагом тихой печати
+        pdf_readers = [
+            (r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe", ["/t"]),
+            (r"C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe", ["/t"]),
+            (r"C:\Program Files\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe", ["/t"]),
+            (r"C:\Program Files\Foxit Software\Foxit PDF Reader\FoxitPDFReader.exe", ["/t"]),
+            (r"C:\Program Files (x86)\Foxit Software\Foxit PDF Reader\FoxitPDFReader.exe", ["/t"]),
+            (r"C:\Program Files\SumatraPDF\SumatraPDF.exe", ["-print-to-default", "-silent"]),
+            (r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe", ["-print-to-default", "-silent"]),
+        ]
+        
+        import subprocess
+        for reader_path, args in pdf_readers:
+            if os.path.exists(reader_path):
                 try:
-                    import win32api
-                    result = win32api.ShellExecute(0, "print", abs_pdf_path, None, ".", 0)
-                    
-                    if result > 32:  # Успешный код возврата
-                        return True
-                    else:
-                        # Если ShellExecute не смог напечатать, проверяем тип ошибки
-                        if result == 31:  # ERROR_GEN_FAILURE - "Присоединенное устройство не работает"
-                            # Открываем файл для ручной печати
-                            subprocess.run(["start", "", abs_pdf_path], shell=True)
-                            QMessageBox.warning(None, "Предупреждение", f"Принтер недоступен. Файл {os.path.basename(abs_pdf_path)} открыт для ручной печати. Пожалуйста, настройте принтер или распечатайте файл вручную.")
-                            return True
-                        else:
-                            raise Exception(f"ShellExecute вернул ошибку: {result}")
-                except ImportError:
-                    # Если win32api недоступен, используем os.startfile как резервный вариант
-                    try:
-                        os.startfile(abs_pdf_path, "print")
-                        return True
-                    except OSError as e:
-                        # Если не удается напечатать, пробуем открыть файл
-                        if "not associated" in str(e).lower() or "сопоставлено" in str(e).lower():
-                            try:
-                                os.startfile(abs_pdf_path)  # Открываем файл вместо печати
-                                QMessageBox.warning(None, "Предупреждение", f"Файл {os.path.basename(abs_pdf_path)} открыт для просмотра. Пожалуйста, распечатайте его вручную.")
-                                return True
-                            except Exception:
-                                pass
-                        QMessageBox.critical(None, "Ошибка", f"Не удалось распечатать этикетку: {str(e)}\n\nПопробуйте установить PDF-ридер (например, Adobe Reader) как приложение по умолчанию для PDF файлов.")
-                        return False
-                        
-            except ImportError:
-                # Если win32api недоступен, используем os.startfile как резервный вариант
-                try:
-                    os.startfile(abs_pdf_path, "print")
+                    subprocess.run([reader_path] + args + [abs_pdf_path], timeout=10)
                     return True
-                except Exception as e:
-                    QMessageBox.critical(None, "Ошибка", f"Не удалось распечатать этикетку: {str(e)}")
-                    return False
-        else:
-            # Для печати без использования Acrobat Reader (напрямую)
-            # В контексте reprint_label (use_acrobat=False) не открываем Acrobat Reader при ошибках
-            try:
-                import win32api
-
-                # Пробуем напечатать файл через ShellExecute
-                result = win32api.ShellExecute(0, "print", abs_pdf_path, None, ".", 0)
-                
-                # Проверяем результат выполнения ShellExecute
-                if result > 32:  # Успешный код возврата
-                    return True
-                else:
-                    # Если ShellExecute не смог напечатать, проверяем тип ошибки
-                    if result == 31:  # ERROR_GEN_FAILURE - "Присоединенное устройство не работает"
-                        # Вместо открытия файла для ручной печати, просто показываем ошибку
-                        QMessageBox.critical(None, "Ошибка печати", f"Принтер недоступен. Не удалось распечатать файл: {os.path.basename(abs_pdf_path)}")
-                        return False
-                    else:
-                        # Для других ошибок выбрасываем исключение для дальнейшей обработки
-                        raise Exception(f"ShellExecute вернул ошибку: {result}")
-            except ImportError:
-                # Если win32api недоступен, используем os.startfile как резервный вариант
-                try:
-                    os.startfile(abs_pdf_path, "print")
-                    return True
-                except OSError as e:
-                    # Если не удается напечатать, пробуем открыть файл
-                    if "not associated" in str(e).lower() or "сопоставлено" in str(e).lower():
-                        try:
-                            os.startfile(abs_pdf_path)  # Открываем файл вместо печати
-                            QMessageBox.warning(None, "Предупреждение", f"Файл {os.path.basename(abs_pdf_path)} открыт для просмотра. Пожалуйста, распечатайте его вручную.")
-                            return True
-                        except Exception:
-                            pass
-                    QMessageBox.critical(None, "Ошибка", f"Не удалось распечатать этикетку: {str(e)}\n\nПопробуйте установить PDF-ридер (например, Adobe Reader) как приложение по умолчанию для PDF файлов.")
-                    return False
-            except Exception as e:
-                # Извлекаем код ошибки из исключения (pywintypes.error имеет структуру (code, func, msg))
-                error_code = None
-                if hasattr(e, 'winerror'):
-                    error_code = e.winerror
-                elif isinstance(e, tuple) and len(e) >= 1:
-                    error_code = e[0]
-                elif hasattr(e, 'args') and isinstance(e.args, tuple) and len(e.args) >= 1:
-                    error_code = e.args[0]
-                
-                if error_code == 31:  # ERROR_GEN_FAILURE - Принтер недоступен
-                    QMessageBox.critical(None, "Ошибка печати", f"Принтер недоступен или не работает. Не удалось распечатать файл: {os.path.basename(abs_pdf_path)}")
-                    return False
-                else:
-                    QMessageBox.critical(None, "Ошибка печати", f"Не удалось отправить файл на печать: {str(e)}")
-                    return False
+                except Exception:
+                    continue
+        
+        # Метод 3: ShellExecute как последний вариант
+        try:
+            import win32api
+            result = win32api.ShellExecute(0, "print", abs_pdf_path, None, ".", 0)
+            if result > 32:
+                return True
+        except Exception:
+            pass
+        
+        # Метод 4: Открываем файл для ручной печати
+        try:
+            os.startfile(abs_pdf_path)
+            QMessageBox.warning(None, "Предупреждение", 
+                f"Автоматическая печать не удалась. Файл {os.path.basename(abs_pdf_path)} открыт.\n"
+                f"Пожалуйста, распечатайте его вручную (Ctrl+P).")
+            return True
+        except Exception as e:
+            QMessageBox.critical(None, "Ошибка печати", 
+                f"Не удалось распечатать этикетку: {str(e)}\n\n"
+                f"Убедитесь, что:\n"
+                f"1. Установлен PDF-ридер (Adobe Reader, Foxit, SumatraPDF)\n"
+                f"2. PDF-ридер установлен как приложение по умолчанию для .pdf файлов\n"
+                f"3. Принтер подключён и работает")
+            return False
     elif sys.platform.startswith('darwin'):
         # Для macOS используем системную команду печати
         try:

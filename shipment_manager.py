@@ -43,249 +43,6 @@ class ShipmentManager:
         # Защита от повторного сканирования (debouncing)
         self.is_scanning = False
 
-    def load_all_data(self):
-        try:
-            self.logger.info("Начало загрузки всех данных")
-            # Загружаем только неархивированные поставки
-            # Используем фактический тип соединения через get_db_type(),
-            # так как при fallback с PostgreSQL на SQLite config.DATABASE_TYPE не обновляется
-            from db_connection import get_db_type
-            db_type = get_db_type()
-            placeholder = "?" if db_type == "sqlite" else "%s"
-
-            shipments_data = database.execute_query(
-                f"""
-                SELECT id, destination_name, font_size, label_font_size, theme, removed_items, parent_group, properties,
-                       archived, archived_date, archived_by
-                FROM shipments
-                WHERE archived = {placeholder}
-                ORDER BY destination_name
-                """,
-                (False if db_type == "postgresql" else 0,),
-                fetchall=True
-            )
-
-            # Ensure all string data is properly encoded
-            processed_shipments_data = []
-            for shipment_row in shipments_data:
-                processed_row = []
-                for item in shipment_row:
-                    if isinstance(item, str):
-                        # Ensure string is properly encoded
-                        try:
-                            item = item.encode('utf-8').decode('utf-8')
-                        except UnicodeDecodeError:
-                            # If there's an encoding issue, try to fix it
-                            item = item.encode('utf-8', errors='ignore').decode('utf-8', errors='ignore')
-                    processed_row.append(item)
-                processed_shipments_data.append(tuple(processed_row))
-
-            shipments_data = processed_shipments_data
-
-            shipments = {}
-            group_shipments = {}
-
-            # ОПТИМИЗАЦИЯ: Загружаем все товары поставок ОДНИМ запросом
-            if shipments_data:
-                shipment_ids = [row[0] for row in shipments_data]
-                placeholders = ','.join([placeholder] * len(shipment_ids))
-                
-                items_query = f"""
-                    SELECT shipment_id, barcode, sku, total_qty, allocated_qty
-                    FROM shipment_items
-                    WHERE shipment_id IN ({placeholders})
-                """
-                all_items_data = database.execute_query(
-                    items_query,
-                    tuple(shipment_ids),
-                    fetchall=True
-                )
-                
-                # Группируем товары по shipment_id
-                items_by_shipment = {}
-                for item_row in all_items_data:
-                    s_id, barcode, sku, total_qty, allocated_qty = item_row
-                    if s_id not in items_by_shipment:
-                        items_by_shipment[s_id] = []
-                    items_by_shipment[s_id].append((barcode, sku, total_qty, allocated_qty))
-            else:
-                items_by_shipment = {}
-
-            # ОПТИМИЗАЦИЯ: Загружаем все коробки ОДНИМ запросом
-            if shipments_data:
-                boxes_query = f"""
-                    SELECT b.id, b.box_id, b.is_current, b.shipment_id
-                    FROM boxes b
-                    WHERE b.shipment_id IN ({placeholders})
-                    ORDER BY b.shipment_id, b.box_id
-                """
-                all_boxes_data = database.execute_query(
-                    boxes_query,
-                    tuple(shipment_ids),
-                    fetchall=True
-                )
-                
-                # Группируем коробки по shipment_id
-                boxes_by_shipment = {}
-                for box_row in all_boxes_data:
-                    box_db_id, box_id, is_current, s_id = box_row
-                    if s_id not in boxes_by_shipment:
-                        boxes_by_shipment[s_id] = []
-                    boxes_by_shipment[s_id].append((box_db_id, box_id, is_current))
-                
-                # ОПТИМИЗАЦИЯ: Загружаем все товары в коробках ОДНИМ запросом
-                if all_boxes_data:
-                    box_ids = [row[0] for row in all_boxes_data]
-                    box_placeholders = ','.join([placeholder] * len(box_ids))
-                    
-                    box_items_query = f"""
-                        SELECT bi.box_id, bi.barcode, bi.qty
-                        FROM box_items bi
-                        WHERE bi.box_id IN ({box_placeholders})
-                    """
-                    all_box_items_data = database.execute_query(
-                        box_items_query,
-                        tuple(box_ids),
-                        fetchall=True
-                    )
-                    
-                    # Группируем товары по box_id
-                    box_items_by_box = {}
-                    for box_item_row in all_box_items_data:
-                        b_id, barcode, qty = box_item_row
-                        if b_id not in box_items_by_box:
-                            box_items_by_box[b_id] = []
-                        box_items_by_box[b_id].append((barcode, qty))
-                else:
-                    box_items_by_box = {}
-            else:
-                boxes_by_shipment = {}
-                box_items_by_box = {}
-
-            # Теперь обрабатываем все поставки с уже загруженными данными
-            for row in shipments_data:
-                # Добавим проверку типа данных для отладки
-                shipment_id_value = row[0]
-                destination_name = row[1]
-                font_size = row[2]
-                label_font_size = row[3]
-                theme = row[4]
-                removed_items_json = row[5]
-                parent_group = row[6]
-                properties_json = row[7]
-                archived = row[8]
-                archived_date = row[9]
-                archived_by = row[10]
-
-                # Проверим, что shipment_id_value - это число, а не строка "id"
-                if isinstance(shipment_id_value, str) and shipment_id_value == "id":
-                    self.logger.error(f"Ошибка: обнаружено строковое значение 'id' вместо числового ID: {row}")
-                    continue  # Пропустим эту строку, чтобы избежать ошибки
-
-                # Проверим тип shipment_id_value
-                if not isinstance(shipment_id_value, int):
-                    try:
-                        shipment_id_value = int(shipment_id_value)
-                    except (ValueError, TypeError):
-                        self.logger.error(f"Ошибка: невозможно преобразовать в число ID: {shipment_id_value}, строка: {row}")
-                        continue
-
-                shipment = Shipment(destination_name, font_size, label_font_size, theme)
-
-                # Устанавливаем поля архива
-                shipment.archived = bool(archived)
-                if archived_date:
-                    from datetime import datetime
-                    try:
-                        shipment.archived_date = datetime.fromisoformat(archived_date)
-                    except ValueError:
-                        self.logger.warning(f"Неверный формат даты архивации для поставки {destination_name}: {archived_date}")
-                        shipment.archived_date = None
-                shipment.archived_by = archived_by
-
-                if removed_items_json:
-                    try:
-                        shipment.removed_items = json.loads(removed_items_json)
-                    except json.JSONDecodeError:
-                        self.logger.warning(f"Ошибка декодирования JSON для удаленных товаров поставки {destination_name}")
-                        shipment.removed_items = {}
-
-                # Загружаем свойства поставки
-                if properties_json:
-                    try:
-                        properties_data = json.loads(properties_json)
-                        shipment.properties = ShipmentProperties.from_dict(properties_data)
-                    except json.JSONDecodeError:
-                        self.logger.warning(f"Ошибка декодирования JSON для свойств поставки {destination_name}")
-                        shipment.properties = ShipmentProperties()
-
-                # Загружаем товары поставки из кэша (без запроса к БД)
-                items_data = items_by_shipment.get(shipment_id_value, [])
-                shipment_items_dict = {}
-                for barcode, sku, total_qty, allocated_qty in items_data:
-                    shipment_items_dict[barcode] = ShipmentItem(barcode, sku, total_qty, allocated_qty)
-                shipment.shipment_items = shipment_items_dict
-
-                # Загружаем коробки и товары в коробках из кэша (без запросов к БД)
-                boxes_data = boxes_by_shipment.get(shipment_id_value, [])
-                current_box_index = -1
-                
-                for i, (box_db_id, box_id, is_current) in enumerate(boxes_data):
-                    box = Box(box_id)
-
-                    # Загружаем товары в коробке из кэша
-                    box_items_data = box_items_by_box.get(box_db_id, [])
-                    box_items_dict = {}
-                    for barcode, qty in box_items_data:
-                        box_items_dict[barcode] = qty
-                    box.items = box_items_dict
-
-                    shipment.boxes.append(box)
-                    if is_current:
-                        current_box_index = i
-                shipment.current_box_index = current_box_index
-
-                if parent_group:
-                    if parent_group not in group_shipments:
-                        group_shipments[parent_group] = GroupShipment(
-                            parent_group, font_size, label_font_size, theme
-                        )
-
-                    # Восстанавливаем display_name для поставок в группе
-                    if '::' in destination_name:
-                        # Извлекаем название направления из уникального имени
-                        display_name = destination_name.split('::', 1)[1]
-                        shipment.display_name = display_name
-                    else:
-                        # Если нет ::, используем destination_name как display_name
-                        shipment.display_name = destination_name
-
-                    group_shipments[parent_group].add_sub_shipment(destination_name, shipment)
-                else:
-                    shipments[destination_name] = shipment
-
-            self.main_window.shipments = shipments
-            self.main_window.group_shipments = group_shipments
-
-            if (self.main_window.current_shipment and
-                self.main_window.current_shipment.destination_name in self.main_window.shipments):
-                self.main_window.current_shipment = self.main_window.shipments[self.main_window.current_shipment.destination_name]
-            else:
-                self.main_window.current_shipment = None
-
-            # Initialize cache after loading all data
-            for shipment in self.main_window.shipments.values():
-                self.update_cache(shipment)
-
-            # Оптимизируем обновление UI - обновляем только при необходимости
-            if not self.main_window.updating_ui:
-                self.main_window.update_ui()
-            self.main_window.statusBar().showMessage("Данные обновлены", 2000)
-            self.logger.info("Загрузка данных завершена успешно")
-        except Exception as e:
-            self.logger.error(f"Ошибка загрузки данных: {e}", exc_info=True)
-            raise
-
     def save_shipment(self, shipment, preserve_box_items=False):
         try:
             self.logger.info(f"Начало сохранения поставки: {shipment.destination_name}")
@@ -447,28 +204,12 @@ class ShipmentManager:
                             (shipment_id,)
                         ))
 
-                    # Подготавливаем batch-вставку для элементов поставки
+                    # Оптимизация: batch-вставка элементов поставки через execute_many
+                    shipment_items_data = []
                     for item in shipment.shipment_items.values():
-                        if use_sqlite:
-                            queries_with_params.append((
-                                """
-                                INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty)
-                                VALUES (?, ?, ?, ?, ?)
-                                """,
-                                (shipment_id, item.barcode.encode('utf-8').decode('utf-8') if isinstance(item.barcode, str) else item.barcode,
-                                 item.sku.encode('utf-8').decode('utf-8') if isinstance(item.sku, str) else item.sku,
-                                 item.total_qty, item.allocated_qty)
-                            ))
-                        else:
-                            queries_with_params.append((
-                                """
-                                INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty)
-                                VALUES (%s, %s, %s, %s, %s)
-                                """,
-                                (shipment_id, item.barcode.encode('utf-8').decode('utf-8') if isinstance(item.barcode, str) else item.barcode,
-                                 item.sku.encode('utf-8').decode('utf-8') if isinstance(item.sku, str) else item.sku,
-                                 item.total_qty, item.allocated_qty)
-                            ))
+                        barcode_val = item.barcode.encode('utf-8').decode('utf-8') if isinstance(item.barcode, str) else item.barcode
+                        sku_val = item.sku.encode('utf-8').decode('utf-8') if isinstance(item.sku, str) else item.sku
+                        shipment_items_data.append((shipment_id, barcode_val, sku_val, item.total_qty, item.allocated_qty))
 
                     # Удаляем существующие коробки
                     if use_sqlite:
@@ -508,6 +249,14 @@ class ShipmentManager:
                     # Выполняем все подготовленные запросы в одной транзакции
                     # Для PostgreSQL сначала вставляем коробки и собираем их ID
                     if not use_sqlite:
+                        # Оптимизация: batch INSERT shipment_items через execute_many
+                        if shipment_items_data:
+                            from db_connection import execute_many
+                            execute_many(
+                                "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES (%s, %s, %s, %s, %s)",
+                                shipment_items_data
+                            )
+
                         box_id_map = {}
                         for query, params in queries_with_params:
                             if 'RETURNING id' in query:
@@ -532,17 +281,29 @@ class ShipmentManager:
                                         (box_db_id,)
                                     )
 
-                                # Вставляем элементы коробки batch-запросом
-                                for barcode, qty in box.items.items():
-                                    cursor.execute(
-                                        """
-                                        INSERT INTO box_items (box_id, barcode, qty)
-                                        VALUES (%s, %s, %s)
-                                        ON CONFLICT (box_id, barcode) DO UPDATE SET qty = EXCLUDED.qty
-                                        """,
-                                        (box_db_id, barcode.encode('utf-8').decode('utf-8') if isinstance(barcode, str) else barcode, qty)
-                                    )
+                    # Оптимизация: batch INSERT box_items через execute_many
+                    box_items_data = []
+                    for i, box in enumerate(shipment.boxes):
+                        box_db_id = box_id_map.get(box.box_id.encode('utf-8').decode('utf-8') if isinstance(box.box_id, str) else box.box_id)
+                        if box_db_id:
+                            for barcode, qty in box.items.items():
+                                barcode_val = barcode.encode('utf-8').decode('utf-8') if isinstance(barcode, str) else barcode
+                                box_items_data.append((box_db_id, barcode_val, qty))
+
+                    if box_items_data:
+                        from db_connection import execute_many
+                        execute_many(
+                            "INSERT INTO box_items (box_id, barcode, qty) VALUES (%s, %s, %s) ON CONFLICT (box_id, barcode) DO UPDATE SET qty = EXCLUDED.qty",
+                            box_items_data
+                        )
                     else:
+                        # Для SQLite: batch INSERT shipment_items через executemany
+                        if shipment_items_data:
+                            cursor.executemany(
+                                "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES (?, ?, ?, ?, ?)",
+                                shipment_items_data
+                            )
+
                         # Для SQLite выполняем все запросы как обычно
                         for query, params in queries_with_params:
                             cursor.execute(query, params)
@@ -559,33 +320,26 @@ class ShipmentManager:
                         else:
                             box_id_map = {}
 
-                        # Подготавливаем batch-запросы для box_items
+                        # Оптимизация: batch INSERT box_items через executemany
+                        sqlite_box_items_data = []
                         for i, box in enumerate(shipment.boxes):
                             box_db_id = box_id_map.get(box.box_id)
-                            
                             if box_db_id:
                                 # Удаляем существующие элементы коробок (если нужно)
                                 if not preserve_box_items:
-                                    queries_with_params.append((
+                                    cursor.execute(
                                         "DELETE FROM box_items WHERE box_id = ?",
                                         (box_db_id,)
-                                    ))
-
-                                # Вставляем элементы коробки batch-запросом
+                                    )
                                 for barcode, qty in box.items.items():
-                                    if use_sqlite:
-                                        queries_with_params.append((
-                                            """
-                                            INSERT OR REPLACE INTO box_items (box_id, barcode, qty)
-                                            VALUES (?, ?, ?)
-                                            """,
-                                            (box_db_id, barcode.encode('utf-8').decode('utf-8') if isinstance(barcode, str) else barcode, qty)
-                                        ))
-                        
-                        # Выполняем оставшиеся запросы
-                        for query, params in queries_with_params:
-                            if 'DELETE FROM box_items' in query or 'INSERT OR REPLACE' in query:
-                                cursor.execute(query, params)
+                                    barcode_val = barcode.encode('utf-8').decode('utf-8') if isinstance(barcode, str) else barcode
+                                    sqlite_box_items_data.append((box_db_id, barcode_val, qty))
+
+                        if sqlite_box_items_data:
+                            cursor.executemany(
+                                "INSERT OR REPLACE INTO box_items (box_id, barcode, qty) VALUES (?, ?, ?)",
+                                sqlite_box_items_data
+                            )
 
                     # Обновляем сессию пользователя для отслеживания активности в этой поставке
                     # Вызываем ПОСЛЕ коммита основной транзакции
@@ -912,28 +666,35 @@ class ShipmentManager:
             )
 
     def schedule_save(self):
-        """Schedule a delayed incremental save to reduce database operations"""
-        # Cancel any existing save timer
-        if self.save_timer:
+        """Отложенное инкрементальное сохранение для уменьшения операций БД"""
+        # Переиспользуем один таймер вместо создания нового
+        if self.save_timer is None:
+            from PyQt6.QtCore import QTimer
+            self.save_timer = QTimer()
+            self.save_timer.setSingleShot(True)
+            self.save_timer.timeout.connect(self.perform_save)
+        else:
             self.save_timer.stop()
         
-        # Create a new timer that will save after a short delay
-        from PyQt6.QtCore import QTimer
-        self.save_timer = QTimer()
-        self.save_timer.setSingleShot(True)
-        self.save_timer.timeout.connect(self.perform_save)
         self.save_timer.start(self.save_delay)
         self.save_pending = True
 
     def schedule_full_save(self):
-        """Отложенное полное сохранение (для структурных изменений — удаление/добавление коробок)"""
-        if self.save_timer:
+        """Отложенное полное сохранение (для структурных изменений)"""
+        if self.save_timer is None:
+            from PyQt6.QtCore import QTimer
+            self.save_timer = QTimer()
+            self.save_timer.setSingleShot(True)
+            self.save_timer.timeout.connect(self.perform_full_save)
+        else:
             self.save_timer.stop()
+            # Переподключаем на perform_full_save
+            try:
+                self.save_timer.timeout.disconnect(self.perform_save)
+            except Exception:
+                pass
+            self.save_timer.timeout.connect(self.perform_full_save)
         
-        from PyQt6.QtCore import QTimer
-        self.save_timer = QTimer()
-        self.save_timer.setSingleShot(True)
-        self.save_timer.timeout.connect(self.perform_full_save)
         self.save_timer.start(self.save_delay)
         self.save_pending = True
 

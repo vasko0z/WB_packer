@@ -36,12 +36,14 @@ psycopg = None
 psycopg2 = None
 SimpleConnectionPool = None
 RealDictCursor = None
+psycopg_extras = None  # Для execute_values / execute_batch
 if config.DATABASE_TYPE == "postgresql":
     # Сначала пробуем psycopg3 (совместим с Python 3.14+)
     try:
         import psycopg
         from psycopg.rows import dict_row
         from psycopg_pool import ConnectionPool as SimpleConnectionPool
+        from psycopg import extras as psycopg_extras
         logger.info("Используется psycopg3 (Python 3.14+)")
     except ImportError:
         psycopg = None
@@ -51,6 +53,7 @@ if config.DATABASE_TYPE == "postgresql":
             import psycopg2.extensions
             from psycopg2.extras import RealDictCursor
             from psycopg2.pool import SimpleConnectionPool
+            from psycopg2 import extras as psycopg_extras
             logger.info("Используется psycopg2")
         except ImportError:
             logger.warning("psycopg2/psycopg3 не установлены. PostgreSQL не будет доступен.")
@@ -701,24 +704,31 @@ def execute_many(query, params_list):
                 conn.commit()
                 
             else:
-                # PostgreSQL
-                # psycopg2 нативно поддерживает UTF-8, избыточное кодирование не требуется
+                # PostgreSQL — используем execute_values для batch insert (в 10-50x быстрее)
                 cursor = conn.cursor()
 
                 # Convert placeholder to PostgreSQL-style %s if not already done
                 if "?" in query:
                     query = query.replace("?", "%s")
 
-                # Execute the query with proper parameter handling for PostgreSQL
                 if params_list:
+                    # Преобразуем параметры в кортежи
+                    processed_params = []
                     for params in params_list:
-                        # Преобразуем параметры в кортеж
                         if not isinstance(params, (tuple, list)):
-                            params = (params,)
+                            processed_params.append((params,))
                         else:
-                            params = tuple(params)
+                            processed_params.append(tuple(params))
 
-                        cursor.execute(query, params)
+                    # execute_values генерирует один большой INSERT с VALUES (...), (...), ...
+                    if psycopg_extras is not None:
+                        psycopg_extras.execute_values(
+                            cursor, query, processed_params, page_size=1000
+                        )
+                    else:
+                        # Fallback: обычный цикл если extras не доступен
+                        for params in processed_params:
+                            cursor.execute(query, params)
                 else:
                     cursor.execute(query)
 
@@ -976,6 +986,7 @@ class DatabaseTransaction:
     def executemany(self, query, params_list):
         """
         Выполнить массовый SQL запрос
+        Для PostgreSQL использует execute_values (в 10-50x быстрее)
         
         Args:
             query: SQL запрос
@@ -987,27 +998,17 @@ class DatabaseTransaction:
         # Адаптируем запрос для типа БД
         if self.db_type == "sqlite":
             query = query.replace("%s", "?")
-        
-        try:
             self.cursor.executemany(query, params_list)
-        except Exception as e:
-            error_str = str(e).lower()
-            is_connection_error = any(keyword in error_str for keyword in [
-                'server closed the connection unexpectedly',
-                'consuming input failed',
-                'connection already closed',
-                'connection reset by peer',
-                'broken pipe',
-                'terminating connection',
-                'no connection to the server'
-            ])
-            if is_connection_error:
-                logger.warning(f"Разрыв соединения в DatabaseTransaction.executemany: {e}")
-                try:
-                    self.conn.rollback()
-                except Exception:
-                    pass
-            raise
+        else:
+            # PostgreSQL — execute_values для batch insert
+            query = query.replace("?", "%s")
+            if psycopg_extras is not None:
+                processed_params = [tuple(p) if not isinstance(p, tuple) else p for p in params_list]
+                psycopg_extras.execute_values(
+                    self.cursor, query, processed_params, page_size=1000
+                )
+            else:
+                self.cursor.executemany(query, params_list)
         
         return self.cursor
     

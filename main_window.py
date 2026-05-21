@@ -107,6 +107,11 @@ class MainWindow(QMainWindow):
         self.save_timer.setSingleShot(True)
         self.save_timer.timeout.connect(self.save_user_settings)
         
+        # Оптимизация: таймер для debounce сохранения ширины колонок
+        self._column_width_save_timer = QTimer()
+        self._column_width_save_timer.setSingleShot(True)
+        self._column_width_save_timer.timeout.connect(self.save_columns_width)
+        
         # Флаг для отслеживания первой загрузки
         self.first_load = True
         
@@ -509,13 +514,10 @@ class MainWindow(QMainWindow):
                     }}
                 """)
                 
-                # Принудительно обновляем иконку после применения стиля
                 if hasattr(checkbox, '_update_icon'):
                     checkbox._update_icon()
 
-                # Принудительно обновляем виджет
                 checkbox.update()
-                checkbox.repaint()
 
     def _update_table_styles(self):
         """Принудительно обновляет стили таблиц после применения темы"""
@@ -537,9 +539,7 @@ class MainWindow(QMainWindow):
                     }}
                 """)
                 self.shipment_table.setAlternatingRowColors(True)
-                # Принудительно обновляем таблицу
                 self.shipment_table.viewport().update()
-                self.shipment_table.repaint()
 
             # Обновляем стили для current_box_table
             if hasattr(self, 'current_box_table') and self.current_box_table:
@@ -552,9 +552,7 @@ class MainWindow(QMainWindow):
                     }}
                 """)
                 self.current_box_table.setAlternatingRowColors(True)
-                # Принудительно обновляем таблицу
                 self.current_box_table.viewport().update()
-                self.current_box_table.repaint()
                 
         except Exception as e:
             self.logger.error(f"Ошибка обновления стилей таблиц: {e}")
@@ -1224,9 +1222,9 @@ class MainWindow(QMainWindow):
 
     def on_table_columns_resized(self):
         """Обработчик изменения размера столбцов таблиц"""
-        # Сохраняем ширину столбцов только если инициализация завершена
+        # Оптимизация: debounce сохранения ширины колонок (300ms)
         if getattr(self, 'initialization_complete', False):
-            self.save_columns_width()
+            self._column_width_save_timer.start(300)
             self.schedule_save_settings()
 
     def on_splitter_moved(self):
@@ -2908,43 +2906,19 @@ class MainWindow(QMainWindow):
             group_shipment = item.data(0, Qt.ItemDataRole.UserRole + 2)
             
             if shipment and not box and not group_shipment: # Это обычная поставка
-                # Загружаем и уменьшаем иконки
-                archive_icon_path = str(config.get_resource_path(Path("Res") / "archive.png"))
-                archive_pixmap = QPixmap(archive_icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                archive_icon = QIcon(archive_pixmap)
+                # Загружаем иконки через кэш (избегаем повторной загрузки с диска)
+                from image_cache import get_cached_icon
+                ICON_SIZE = (16, 16)
                 
-                excel_icon_path = str(config.get_resource_path(Path("Res") / "excel.png"))
-                excel_pixmap = QPixmap(excel_icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                excel_icon = QIcon(excel_pixmap)
-                
-                word_icon_path = str(config.get_resource_path(Path("Res") / "word.png"))
-                word_pixmap = QPixmap(word_icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                word_icon = QIcon(word_pixmap)
-                
-                delete_icon_path = str(config.get_resource_path(Path("Res") / "delete.png"))
-                delete_pixmap = QPixmap(delete_icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                delete_icon = QIcon(delete_pixmap)
-                
-                clean_icon_path = str(config.get_resource_path(Path("Res") / "clean.png"))
-                clean_pixmap = QPixmap(clean_icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                clean_icon = QIcon(clean_pixmap)
-                
-                refresh_icon_path = str(config.get_resource_path(Path("Res") / "refresh.png"))
-                refresh_pixmap = QPixmap(refresh_icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                refresh_icon = QIcon(refresh_pixmap)
-                
-                rename_icon_path = str(config.get_resource_path(Path("Res") / "rename.png"))
-                rename_pixmap = QPixmap(rename_icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                rename_icon = QIcon(rename_pixmap)
-                
-                settings_icon_path = str(config.get_resource_path(Path("Res") / "settings.png"))
-                settings_pixmap = QPixmap(settings_icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                settings_icon = QIcon(settings_pixmap)
-                
-                # Добавляем иконку для импорта
-                import_icon_path = str(config.get_resource_path(Path("Res") / "import.png"))
-                import_pixmap = QPixmap(import_icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                import_icon = QIcon(import_pixmap)
+                archive_icon = get_cached_icon(config.get_resource_path(Path("Res") / "archive.png"), ICON_SIZE)
+                excel_icon = get_cached_icon(config.get_resource_path(Path("Res") / "excel.png"), ICON_SIZE)
+                word_icon = get_cached_icon(config.get_resource_path(Path("Res") / "word.png"), ICON_SIZE)
+                delete_icon = get_cached_icon(config.get_resource_path(Path("Res") / "delete.png"), ICON_SIZE)
+                clean_icon = get_cached_icon(config.get_resource_path(Path("Res") / "clean.png"), ICON_SIZE)
+                refresh_icon = get_cached_icon(config.get_resource_path(Path("Res") / "refresh.png"), ICON_SIZE)
+                rename_icon = get_cached_icon(config.get_resource_path(Path("Res") / "rename.png"), ICON_SIZE)
+                settings_icon = get_cached_icon(config.get_resource_path(Path("Res") / "settings.png"), ICON_SIZE)
+                import_icon = get_cached_icon(config.get_resource_path(Path("Res") / "import.png"), ICON_SIZE)
                 
                 # Доба��ляем пункт архивации
                 archive_action = menu.addAction(archive_icon, "Отправить в архив")
@@ -3019,9 +2993,8 @@ class MainWindow(QMainWindow):
                 delete_group_action = menu.addAction("Удалить группу")
 
                 menu.addSeparator()
-                settings_icon_path = str(config.get_resource_path(Path("Res") / "settings.png"))
-                settings_pixmap = QPixmap(settings_icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                settings_icon = QIcon(settings_pixmap)
+                from image_cache import get_cached_icon
+                settings_icon = get_cached_icon(config.get_resource_path(Path("Res") / "settings.png"), (16, 16))
                 properties_group_action = menu.addAction(settings_icon, "Свойства")
 
                 action = self.shipments_tree_widget.mapToGlobal(position)

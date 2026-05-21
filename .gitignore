@@ -12,6 +12,7 @@ ENV/
 # IDE
 .vscode/
 .idea/
+.opencode/
 *.swp
 *.swo
 *~
@@ -54,6 +55,10 @@ nul
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Копии файлов
+* -- копия.*
+* - копия.*
 
 # Папки с генерируемыми данными
 PDF/

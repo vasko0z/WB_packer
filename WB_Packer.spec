@@ -81,7 +81,7 @@ binaries = []
 try:
     from PyInstaller.utils.hooks import collect_dynamic_libs
     # PyQt6 — только нужные модули: QtWidgets, QtCore, QtGui, QtPrintSupport
-    for pkg in ['pandas', 'numpy', 'psycopg2', 'sqlalchemy', 'PIL', 'reportlab', 'psutil', 'pymupdf']:
+    for pkg in ['pandas', 'numpy', 'psycopg2', 'PIL', 'reportlab', 'psutil', 'pymupdf']:
         try:
             pkg_binaries = collect_dynamic_libs(pkg)
             binaries.extend(pkg_binaries)
@@ -113,8 +113,6 @@ a = Analysis(
         # PostgreSQL
         'psycopg2', 'psycopg2._psycopg', 'psycopg2.pool',
         'psycopg', 'psycopg_pool',
-        # ORM
-        'sqlalchemy', 'sqlalchemy.orm', 'sqlalchemy.orm.sessionmaker',
         # HTTP
         'requests', 'requests.adapters', 'requests.auth',
         'urllib3', 'urllib3.contrib', 'urllib3.util', 'urllib3.poolmanager',
@@ -128,24 +126,21 @@ a = Analysis(
         'dateutil', 'dateutil.relativedelta', 'dateutil.parser',
         'zoneinfo',
         'backports',
-        # Tkinter (для labelprint)
-        'tkinter', 'tkinter.ttk', 'tkinter.scrolledtext', 'tkinter.messagebox', 'tkinter.filedialog',
         'pymupdf', 'fitz',
         # Локальные модули
         'database', 'db_connection', 'models', 'utils', 'version', 'config',
-        'app_constants', 'themes', 'dialogs', 'common_utils',
+        'app_constants', 'themes', 'dialogs',
         'shipment_manager', 'shipment_operations', 'ui_updater', 'main_window',
-        'data_controller', 'data_cache', 'async_operations', 'async_worker',
-        'boxes_window', 'archive_window', 'custom_table_widget',
+        'data_controller', 'async_operations',
+        'custom_table_widget',
         'check_stock_dialog', 'db_settings_dialog', 'label_print_dialog',
-        'label_settings_dialog', 'labelprint', 'moysklad_api', 'moysklad_logger',
-        'moysklad_settings_dialog', 'simplified_dialog', 'shipment_check_dialog',
-        'shipment_controller', 'shipment_data_fetcher', 'shipment_tracking_widget',
-        'final_corrected_stock_manager', 'get_stock_quantity_for_item',
-        'improved_moysklad_sync', 'optimized_get_stock_quantity', 'progress_dialog',
-        'memory_manager', 'local_db', 'lock_manager', 'logging_config',
-        'image_cache', 'image_check_box', 'create_test_label', 'check_size',
-        'editing_delegate', 'minimal_shipment_dialog', 'security_utils',
+        'label_settings_dialog', 'moysklad_api', 'moysklad_logger',
+        'moysklad_settings_dialog', 'shipment_check_dialog',
+        'shipment_controller',
+        'improved_moysklad_sync', 'optimized_get_stock_quantity',
+        'memory_manager', 'lock_manager', 'logging_config',
+        'image_cache', 'image_check_box',
+        'editing_delegate', 'security_utils',
         'db_discovery', 'splash_screen', 'mvc_controller',
         # Скрытые зависимости
         'sqlite3', 'multiprocessing', 'concurrent.futures',
@@ -157,7 +152,7 @@ a = Analysis(
         # Тесты pandas — основная причина большого размера
         'pandas.tests', 'numpy.tests', 'numpy.lib.tests',
         'openpyxl.tests', 'PIL.tests', 'reportlab.tests',
-        'sqlalchemy.tests', 'psycopg2.tests', 'psycopg.tests',
+        'psycopg2.tests', 'psycopg.tests',
         'tkinter.tests', 'urllib3.tests', 'requests.tests',
         # Исключаем неиспользуемые модули PyQt6
         'PyQt6.Qt3DCore', 'PyQt6.Qt3DRender', 'PyQt6.Qt3DExtras', 'PyQt6.Qt3DAnimation',

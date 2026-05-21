@@ -256,28 +256,6 @@ class ImprovedMoyskladSync(QObject):
             logger.error(f"Ошибка при обнулении кэша перед синхронизацией: {e}")
             moysklad_logger.error(f"ОШИБКА при обнулении кэша перед синхронизацией: {e}", exc_info=True)
 
-    def _clear_cache_before_sync(self, barcodes: List[str]):
-        """Обнуляем кэш остатков перед синхронизацией"""
-        try:
-            # Обнуляем кэш в базе данных для всех штрихкодов, участвующих в синхронизации
-            zero_data = {barcode: 0 for barcode in barcodes}
-            database.set_multiple_stock_cache(zero_data)
-            
-            # Обнуляем локальный кэш для всех штрихкодов
-            with stock_cache.lock:
-                for barcode in barcodes:
-                    stock_cache.cache[barcode] = {
-                        'quantity': 0,
-                        'timestamp': datetime.now()
-                    }
-            
-            logger.info(f"Кэш обнулен для {len(barcodes)} штрихкодов перед синхронизацией")
-            moysklad_logger.info(f"КЭШ ОБНУЛЕН для {len(barcodes)} штрихкодов перед синхронизацией")
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обнулении кэша перед синхронизацией: {e}")
-            moysklad_logger.error(f"ОШИБКА при обнулении кэша перед синхронизацией: {e}", exc_info=True)
-
 
 class SyncWorker(QObject):
     """

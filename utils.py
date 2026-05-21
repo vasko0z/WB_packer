@@ -202,25 +202,35 @@ def _play_sound_with_volume(sound_path, volume):
     thread = threading.Thread(target=_play_in_thread, daemon=True)
     thread.start()
 
+# Оптимизация: кэш локального пользователя в памяти
+_local_username_cache = None
+
 def get_local_user_file():
     documents = Path.home() / "Documents"
     documents.mkdir(exist_ok=True)
     return documents / "current_user.txt"
 
 def save_local_user(username):
+    global _local_username_cache
     try:
         with open(get_local_user_file(), "w", encoding="utf-8") as f:
             f.write(username)
+        _local_username_cache = username
     except Exception as e:
         logger = logging.getLogger(__name__)
         logger.error(f"Не удалось сохранить локального пользователя: {e}")
 
 def load_local_user():
+    global _local_username_cache
+    if _local_username_cache is not None:
+        return _local_username_cache
     try:
         user_file = get_local_user_file()
         if user_file.exists():
             with open(user_file, "r", encoding="utf-8") as f:
-                return f.read().strip()
+                username = f.read().strip()
+                _local_username_cache = username
+                return username
     except Exception as e:
         logger = logging.getLogger(__name__)
         logger.error(f"Не удалось загрузить локального пользователя: {e}")

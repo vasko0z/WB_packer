@@ -54,6 +54,24 @@ class UIUpdater:
     def __init__(self, main_window):
         self.main_window = main_window
         self._allocated_qty_cache = {}  # Кэш для get_total_allocated_qty
+        self._button_stylesheet_cache = {}  # Кэш стилей кнопок по теме
+        # Оптимизация: shared validator и regex для всех строк
+        self._qty_validator = QRegularExpressionValidator(QRegularExpression("\\d+"))
+        # Оптимизация: кэш QFont по (size, bold)
+        self._font_cache = {}
+        # Оптимизация: флаг что таблица коробки уже была resized
+        self._box_table_resized = False
+
+    def _get_cached_font(self, size: int, bold: bool = False) -> QFont:
+        """Возвращает кэшированный QFont для заданного размера и жирности"""
+        key = (size, bold)
+        if key not in self._font_cache:
+            font = QFont()
+            font.setPointSize(size)
+            if bold:
+                font.setBold(True)
+            self._font_cache[key] = font
+        return self._font_cache[key]
 
     def _clear_allocated_qty_cache(self):
         """Очищает кэш собранных товаров"""
@@ -253,49 +271,35 @@ class UIUpdater:
                             self._update_group_progress_in_widget(group_widget, group_shipment)
 
     def _update_progress_in_widget(self, widget, shipment):
-        """Обновляет только прогресс в виджете поставки"""
+        """Обновляет только прогресс в виджете поставки (использует кэшированные ссылки)"""
         allocated, total = shipment.get_progress_info()
         remaining = total - allocated
 
-        # Находим label с прогрессом по objectName
-        progress_label = widget.findChild(QLabel, "shipment_progress_label")
-        
-        # Если не нашли по objectName, ищем по позиции (второй элемент в top_layout)
-        if not progress_label:
-            layout = widget.layout()
-            if layout and isinstance(layout, QVBoxLayout):
-                if layout.count() > 0:
-                    top_layout_item = layout.itemAt(0)
-                    if top_layout_item and isinstance(top_layout_item, QHBoxLayout):
-                        if top_layout_item.count() > 1:
-                            progress_item = top_layout_item.itemAt(1)
-                            if progress_item and progress_item.widget() and isinstance(progress_item.widget(), QLabel):
-                                progress_label = progress_item.widget()
+        # Используем кэшированные ссылки вместо findChild/findChildren
+        progress_label = getattr(widget, 'progress_label', None)
+        progress_bar = getattr(widget, 'progress_bar', None)
 
-        progress_bar = None
-        for child in widget.findChildren(QProgressBar):
-            progress_bar = child
-            break
+        # Fallback: если кэш отсутствует, ищем по objectName
+        if not progress_label:
+            progress_label = widget.findChild(QLabel, "shipment_progress_label")
 
         # Обновляем найденные виджеты
         if progress_label:
-            # Формат: "собрано/всего" (например, "134/200")
             if total > 0:
                 progress_label.setText(f"{allocated}/{total}")
             else:
                 progress_label.setText("0/0")
             progress_label.setToolTip(f"Собрано: {allocated} из {total}")
             
-            # Цвет зависит от прогресса
             theme = themes.THEMES.get(self.main_window.current_theme, themes.THEMES["Светлая"])
             if total == 0:
                 text_color = theme["window_text"].name()
             elif remaining == 0:
-                text_color = "#28a745"  # Зеленый - все собрано
+                text_color = "#28a745"
             elif remaining < total:
-                text_color = "#ffc107"  # Желтый - частично собрано
+                text_color = "#ffc107"
             else:
-                text_color = theme["window_text"].name()  # Обычный цвет
+                text_color = theme["window_text"].name()
             
             progress_label.setStyleSheet(f"color: {text_color}; font-weight: bold;")
 
@@ -304,45 +308,33 @@ class UIUpdater:
             progress_bar.setValue(min(allocated, max_value))
 
     def _update_group_progress_in_widget(self, widget, group_shipment):
-        """Обновляет прогресс в виджете групповой поставки"""
+        """Обновляет прогресс в виджете групповой поставки (кэшированные ссылки)"""
         allocated, total = group_shipment.get_progress_info()
         remaining = total - allocated
 
-        # Находим label с прогрессом по objectName
-        progress_label = widget.findChild(QLabel, "shipment_progress_label")
+        progress_label = getattr(widget, 'progress_label', None)
+        progress_bar = getattr(widget, 'progress_bar', None)
 
-        # Если не нашли по objectName, ищем по позиции
         if not progress_label:
-            layout = widget.layout()
-            if layout and isinstance(layout, QVBoxLayout):
-                if layout.count() > 0:
-                    top_layout_item = layout.itemAt(0)
-                    if top_layout_item and isinstance(top_layout_item, QHBoxLayout):
-                        # В групповой поставке: 0=иконка, 1=название, 2=прогресс
-                        if top_layout_item.count() > 2:
-                            progress_item = top_layout_item.itemAt(2)
-                            if progress_item and progress_item.widget() and isinstance(progress_item.widget(), QLabel):
-                                progress_label = progress_item.widget()
+            progress_label = widget.findChild(QLabel, "shipment_progress_label")
 
-        progress_bar = None
-        for child in widget.findChildren(QProgressBar):
-            progress_bar = child
-            break
+        if not progress_bar:
+            for child in widget.findChildren(QProgressBar):
+                progress_bar = child
+                break
 
-        # Обновляем найденные виджеты
         if progress_label:
             if total > 0:
                 progress_label.setText(f"{allocated}/{total}")
             else:
                 progress_label.setText("0/0")
 
-            # Цвет в зависимости от прогресса
             if total > 0 and allocated >= total:
-                text_color = "#27ae60"  # Зеленый - завершено
+                text_color = "#27ae60"
             elif allocated > 0:
-                text_color = "#3498db"  # Синий - в процессе
+                text_color = "#3498db"
             else:
-                text_color = "#7f8c8d"  # Серый - не начато
+                text_color = "#7f8c8d"
 
             progress_label.setStyleSheet(f"color: {text_color}; font-weight: bold;")
 
@@ -351,27 +343,24 @@ class UIUpdater:
             progress_bar.setValue(min(allocated, max_value))
 
         widget.update()
-        widget.repaint()
 
     def _update_box_progress_in_widget(self, widget, box, shipment):
-        """Обновляет только прогресс в виджете коробки"""
-        # Обновляем количество товаров в коробке
+        """Обновляет только прогресс в виджете коробки (кэшированная ссылка)"""
         total_items = box.total_items_count()
         
-        # Находим label с названием коробки
-        for child in widget.findChildren(QLabel):
-            text = child.text()
-            # Проверяем, это название коробки с количеством (например, "Коробка-1 (5 шт.)")
-            if '(' in text and 'шт.)' in text:
-                # Обновляем текст с новым количеством
-                box_name = text.split(' (')[0]
-                child.setText(f"{box_name} ({total_items} шт.)")
-                child.update()
-                child.repaint()
-                break
+        name_label = getattr(widget, 'box_name_label', None)
+        if name_label:
+            box_name = name_label.text().split(' (')[0]
+            name_label.setText(f"{box_name} ({total_items} шт.)")
+        else:
+            for child in widget.findChildren(QLabel):
+                text = child.text()
+                if '(' in text and 'шт.)' in text:
+                    box_name = text.split(' (')[0]
+                    child.setText(f"{box_name} ({total_items} шт.)")
+                    break
 
         widget.update()
-        widget.repaint()
 
     def _update_tree_styles_fast(self):
         """Быстро обновляет стили всех элементов дерева на основе current_shipment"""
@@ -735,11 +724,7 @@ class UIUpdater:
         text_color = theme["window_text"].name()
 
         # Устанавливаем шрифт с явным размером из настроек
-        name_font = QFont()
-        name_font.setPointSize(self.main_window.font_size)
-        if not is_child:
-            name_font.setBold(True)
-        name_label.setFont(name_font)
+        name_label.setFont(self._get_cached_font(self.main_window.font_size, bold=not is_child))
         name_style = f"color: {text_color};"
         name_label.setStyleSheet(name_style)
         name_label.setWordWrap(True)
@@ -785,6 +770,8 @@ class UIUpdater:
 
         # Устанавливаем objectName для поиска при обновлении
         progress_text.setObjectName("shipment_progress_label")
+        # Кэшируем ссылку на label для быстрого обновления
+        widget.progress_label = progress_text
 
         # Разрешаем метке расширяться по горизонтали
         progress_text.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred)
@@ -792,9 +779,7 @@ class UIUpdater:
         progress_text.setMinimumWidth(80)
         progress_text.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         # Устанавливаем шрифт с явным размером из настроек
-        progress_font = QFont()
-        progress_font.setPointSize(self.main_window.font_size)
-        progress_text.setFont(progress_font)
+        progress_text.setFont(self._get_cached_font(self.main_window.font_size))
 
         # Цвет зависит от прогресса
         if total == 0:
@@ -815,9 +800,7 @@ class UIUpdater:
         boxes_count = len(shipment.boxes)
         boxes_label = QLabel(f"📦 {boxes_count}")
         boxes_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        boxes_font = QFont()
-        boxes_font.setPointSize(self.main_window.font_size)
-        boxes_label.setFont(boxes_font)
+        boxes_label.setFont(self._get_cached_font(self.main_window.font_size))
         boxes_label.setStyleSheet(f"color: {text_color};")
         boxes_label.setToolTip(f"Коробок в поставке: {boxes_count}")
         top_layout.addWidget(boxes_label)
@@ -846,6 +829,8 @@ class UIUpdater:
  }}
  """)
             layout.addWidget(progress_bar)
+            # Кэшируем ссылку на прогресс-бар для быстрого обновления
+            widget.progress_bar = progress_bar
 
         self.main_window.shipments_tree_widget.setItemWidget(item, 0, widget)
         item.setSizeHint(0, QSize(100, SHIPMENT_ITEM_HEIGHT_WITH_PROGRESS if total > 0 else SHIPMENT_ITEM_HEIGHT_NO_PROGRESS))
@@ -938,11 +923,11 @@ class UIUpdater:
         item.setData(0, Qt.ItemDataRole.UserRole + 3, box_text)
         
         name_label = QLabel(box_text)
+        # Кэшируем ссылку на label названия коробки для быстрого обновления
+        widget.box_name_label = name_label
         text_color = theme["window_text"].name()
         # Устанавливаем шрифт с явным размером из настроек
-        name_font = QFont()
-        name_font.setPointSize(self.main_window.font_size)
-        name_label.setFont(name_font)
+        name_label.setFont(self._get_cached_font(self.main_window.font_size))
         name_style = f"color: {text_color};"
         name_label.setStyleSheet(name_style)
         name_label.setMinimumWidth(120)
@@ -984,10 +969,7 @@ class UIUpdater:
         status_label = QLabel()
         status_label.setPixmap(status_pixmap.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         status_label.setFixedSize(24, 24)
-        # Устанавливаем шрифт с явным размером из настроек
-        status_font = QFont()
-        status_font.setPointSize(self.main_window.font_size)
-        status_label.setFont(status_font)
+        status_label.setFont(self._get_cached_font(self.main_window.font_size))
         status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         top_layout.addWidget(status_label)
 
@@ -998,10 +980,7 @@ class UIUpdater:
         
         text_color = theme["window_text"].name()
         # Устанавливаем шрифт с явным размером из настроек
-        name_font = QFont()
-        name_font.setPointSize(self.main_window.font_size)
-        name_font.setBold(True)
-        name_label.setFont(name_font)
+        name_label.setFont(self._get_cached_font(self.main_window.font_size, bold=True))
         name_label.setStyleSheet(f"color: {text_color};")
         name_label.setWordWrap(True)
         name_label.setMinimumWidth(100)  # Минимальная ширина
@@ -1017,9 +996,7 @@ class UIUpdater:
         progress_text.setMinimumWidth(100)
         progress_text.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         # Устанавливаем шрифт с явным размером из настроек
-        progress_font = QFont()
-        progress_font.setPointSize(self.main_window.font_size)
-        progress_text.setFont(progress_font)
+        progress_text.setFont(self._get_cached_font(self.main_window.font_size))
         progress_text.setStyleSheet(f"font-weight: bold; color: {text_color};")
         progress_text.setToolTip(f"Собрано: {allocated} из {total}")
         progress_text.updateGeometry()  # Принудительно обновляем геометрию
@@ -1052,9 +1029,8 @@ class UIUpdater:
 
         sub_shipments_info = QLabel(f"Направления: {len(group_shipment.sub_shipments)}")
         # Устанавливаем шрифт с размером на 1 меньше основного
-        sub_font = QFont()
-        sub_font.setPointSize(max(8, self.main_window.font_size - 1))  # Уменьшаем на 1, но не меньше 8
-        sub_shipments_info.setFont(sub_font)
+        sub_size = max(8, self.main_window.font_size - 1)
+        sub_shipments_info.setFont(self._get_cached_font(sub_size))
         sub_shipments_info.setStyleSheet(f"color: {text_color};")
         layout.addWidget(sub_shipments_info)
 
@@ -1137,6 +1113,11 @@ class UIUpdater:
                 current_theme = "Светлая"
             theme = themes.THEMES.get(current_theme, themes.THEMES["Светлая"])
 
+            # Очищаем кэш стилей если тема изменилась
+            cached_themes = set(self._button_stylesheet_cache.keys())
+            if current_theme not in cached_themes and len(cached_themes) > 3:
+                self._button_stylesheet_cache.clear()
+
             logger.debug(f"update_shipment_table: тема={current_theme}, table_bg={theme['table_bg'].name()}, text={theme['text'].name()}, highlight={theme['highlight'].name()}")
 
             # Отключаем обновления таблицы во время заполнения для повышения производительности
@@ -1160,36 +1141,103 @@ class UIUpdater:
                 product_names = {}
             if MOYSKLAD_API_AVAILABLE and moysklad_enabled:
                 try:
-                    # Используем кэшированные остатки из базы данных без автоматического обновления при переключении поставок
+                    # Batch-загрузка остатков одним запросом вместо цикла
+                    from get_stock_quantity_for_item import stock_cache
+                    barcodes_to_load = []
                     for item in shipment_items:
-                        # Сначала пробуем получить из локального кэша
-                        from get_stock_quantity_for_item import stock_cache
                         cached_qty = stock_cache.get_cached_quantity(item.barcode)
                         if cached_qty is not None:
                             stock_quantities[item.barcode] = cached_qty
                         else:
-                            # Если в локальном кэше нет, пробуем получить из базы данных
-                            db_qty = database.get_stock_cache(item.barcode)
+                            barcodes_to_load.append(item.barcode)
+
+                    if barcodes_to_load:
+                        db_results = database.get_stock_cache_batch(barcodes_to_load)
+                        for barcode, db_qty in db_results.items():
                             if db_qty is not None:
-                                stock_quantities[item.barcode] = db_qty
-                                # Также сохраняем в локальный кэш для ускорения последующих обращений
-                                stock_cache.set_cached_quantity(item.barcode, db_qty)
+                                stock_quantities[barcode] = db_qty
+                                stock_cache.set_cached_quantity(barcode, db_qty)
                             else:
-                                # Если остаток не закэширован нигде, устанавливаем 0
-                                stock_quantities[item.barcode] = 0
+                                stock_quantities[barcode] = 0
                 except Exception as e:
                     logger.error(f"Ошибка при получении кэшированных остатков: {e}")
-                    # В случае ошибки, устанавливаем 0 для всех товаров
                     for item in shipment_items:
                         stock_quantities[item.barcode] = 0
 
             logger.info(f"Начало цикла заполнения таблицы: {len(shipment_items)} товаров, stock_quantities keys={len(stock_quantities) if stock_quantities else 0}, moysklad_enabled={moysklad_enabled}, stock_column_visible={stock_column_visible}")
             
-            # Оптимизация: предварительно рассчитываем все allocated_qty перед циклом
-            # Это избегает многократных переборов всех поставок и коробок для каждого товара
+            # Оптимизация: pre-compute global allocated map за один проход по всем коробкам
+            # Вместо O(N*M*B) -> O(N*M + B)
+            global_allocated_map = {}
+            for shipment in self.main_window.shipments.values():
+                for box in shipment.boxes:
+                    for bc, qty in box.items.items():
+                        if qty > 0:
+                            global_allocated_map[bc] = global_allocated_map.get(bc, 0) + qty
+            for group_shipment in self.main_window.group_shipments.values():
+                for sub_shipment in group_shipment.sub_shipments.values():
+                    for box in sub_shipment.boxes:
+                        for bc, qty in box.items.items():
+                            if qty > 0:
+                                global_allocated_map[bc] = global_allocated_map.get(bc, 0) + qty
+            
             allocated_qty_cache = {}
             for item in shipment_items:
-                allocated_qty_cache[item.barcode] = self.get_total_allocated_qty(item.barcode)
+                allocated_qty_cache[item.barcode] = global_allocated_map.get(item.barcode, 0)
+            
+            # Оптимизация: кэшируем stylesheet кнопок по теме (одинаковый для всех строк)
+            theme_key = current_theme
+            if theme_key not in self._button_stylesheet_cache:
+                self._button_stylesheet_cache[theme_key] = (f"""
+QPushButton {{
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 {theme["accent_success"].lighter(120).name()},
+        stop: 0.5 {theme["accent_success"].name()},
+        stop: 1 {theme["accent_success"].darker(120).name()});
+    color: white;
+    border: 1px solid {theme["accent_success"].darker(150).name()};
+    padding: 0px;
+    margin: 0px;
+    border-radius: 3px;
+    font-weight: bold;
+    font-size: 11px;
+    min-height: 16px;
+    max-height: 16px;
+    min-width: 16px;
+    max-width: 16px;
+    height: 16px;
+}}
+QPushButton:disabled {{
+    background: {theme["button_bg"].name()};
+    color: {theme["button_text"].name()};
+    border: 1px solid {theme["button_border"].name()};
+    min-height: 16px;
+    max-height: 16px;
+    height: 16px;
+}}
+QPushButton:hover {{
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 {theme["accent_success"].lighter(140).name()},
+        stop: 0.5 {theme["accent_success"].lighter(120).name()},
+        stop: 1 {theme["accent_success"].name()});
+    min-height: 16px;
+    max-height: 16px;
+    height: 16px;
+}}
+""", f"""
+QLineEdit {{
+    border: 1px solid {theme["button_border"].name()};
+    padding: 1px;
+    border-radius: 3px;
+    font-size: 11px;
+    background-color: {theme["input_bg"].name()};
+    color: {theme["input_text"].name()};
+}}
+QLineEdit:focus {{
+    border: 1px solid {theme["accent_primary"].name()};
+}}
+""")
+            add_btn_stylesheet, qty_lineedit_stylesheet = self._button_stylesheet_cache[theme_key]
             
             for row, item in enumerate(shipment_items):
                 remaining_qty = item.remaining_qty
@@ -1297,43 +1345,7 @@ class UIUpdater:
                 add_btn.setMinimumHeight(16)
                 add_btn.setMaximumHeight(16)
 
-                add_btn.setStyleSheet(f"""
-QPushButton {{
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 {theme["accent_success"].lighter(120).name()},
-        stop: 0.5 {theme["accent_success"].name()},
-        stop: 1 {theme["accent_success"].darker(120).name()});
-    color: white;
-    border: 1px solid {theme["accent_success"].darker(150).name()};
-    padding: 0px;
-    margin: 0px;
-    border-radius: 3px;
-    font-weight: bold;
-    font-size: 11px;
-    min-height: 16px;
-    max-height: 16px;
-    min-width: 16px;
-    max-width: 16px;
-    height: 16px;
-}}
-QPushButton:disabled {{
-    background: {theme["button_bg"].name()};
-    color: {theme["button_text"].name()};
-    border: 1px solid {theme["button_border"].name()};
-    min-height: 16px;
-    max-height: 16px;
-    height: 16px;
-}}
-QPushButton:hover {{
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 {theme["accent_success"].lighter(140).name()},
-        stop: 0.5 {theme["accent_success"].lighter(120).name()},
-        stop: 1 {theme["accent_success"].name()});
-    min-height: 16px;
-    max-height: 16px;
-    height: 16px;
-}}
-""")
+                add_btn.setStyleSheet(add_btn_stylesheet)
                 add_btn.setToolTip("Добавить указанное количество в коробку")
 
                 # Поле ввода количества
@@ -1342,23 +1354,10 @@ QPushButton:hover {{
                 qty_lineedit.setText(str(max(1, int(item.remaining_qty))))
                 qty_lineedit.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 qty_lineedit.setToolTip("Количество для добавления")
-                qty_lineedit.setStyleSheet(f"""
-QLineEdit {{
-    border: 1px solid {theme["button_border"].name()};
-    padding: 1px;
-    border-radius: 3px;
-    font-size: 11px;
-    background-color: {theme["input_bg"].name()};
-    color: {theme["input_text"].name()};
-}}
-QLineEdit:focus {{
-    border: 1px solid {theme["accent_primary"].name()};
-}}
-""")
+                qty_lineedit.setStyleSheet(qty_lineedit_stylesheet)
 
-                # Валидатор только для чисел
-                validator = QRegularExpressionValidator(QRegularExpression("\\d+"))
-                qty_lineedit.setValidator(validator)
+                # Валидатор только для чисел (shared instance)
+                qty_lineedit.setValidator(self._qty_validator)
                 qty_lineedit.setFixedWidth(35)  # Увеличиваем ширину для чисел
 
                 # Обработчик кнопки - используем lambda с явными аргументами для избежания проблем с замыканием
@@ -1367,11 +1366,12 @@ QLineEdit:focus {{
                 action_layout.addWidget(add_btn)
                 action_layout.addWidget(qty_lineedit)
 
+                # Оптимизация: кэшируем ссылки на кнопку и поле ввода для быстрого доступа
+                action_widget.add_btn = add_btn
+                action_widget.qty_lineedit = qty_lineedit
+
                 # Показываем виджет с кнопкой "+" всегда
                 self.main_window.shipment_table.setCellWidget(row, 6, action_widget)
-                
-                # Устанавливаем фиксированную ширину столбца 6
-                self.main_window.shipment_table.setColumnWidth(6, 80)
                 
                 # Устанавливаем стиль кнопок в зависимости от состояния
                 is_disabled = item.remaining_qty <= 0 or barcode in self.main_window.current_shipment.removed_items
@@ -1487,6 +1487,13 @@ QLineEdit:focus {{
             theme = themes.THEMES.get(self.main_window.current_theme, themes.THEMES["Светлая"])
             # Отключаем обновления таблицы во время заполнения для повышения производительности
             self.main_window.current_box_table.setUpdatesEnabled(False)
+
+            # Оптимизация: pre-compute total allocated per barcode за один проход
+            total_allocated_per_barcode = {}
+            for box in self.main_window.current_shipment.boxes:
+                for bc, q in box.items.items():
+                    total_allocated_per_barcode[bc] = total_allocated_per_barcode.get(bc, 0) + q
+
             for row, (barcode, qty) in enumerate(current_box.items.items()):
                 # Создаем ячейки для штрихкода и артикула с запретом редактирования
                 barcode_item = QTableWidgetItem(barcode)
@@ -1532,10 +1539,7 @@ QLineEdit:focus {{
                 else:
                     # Проверяем, является ли товар "лишним" - т.е. общее распределенное количество
                     # для этого товара превышает новое общее количество в поставке
-                    total_allocated_in_boxes = 0
-                    for box in self.main_window.current_shipment.boxes:
-                        if barcode in box.items:
-                            total_allocated_in_boxes += box.items[barcode]
+                    total_allocated_in_boxes = total_allocated_per_barcode.get(barcode, 0)
                     
                     if shipment_item and total_allocated_in_boxes > shipment_item.total_qty:
                         # Общее количество этого товара в коробках превышает новое общее количество в поставке
@@ -1582,11 +1586,15 @@ QLineEdit:focus {{
                         if self.main_window.current_box_table.columnWidth(i) != width:
                             self.main_window.current_box_table.setColumnWidth(i, width)
             except (ValueError, IndexError):
-                # Если не удалось восстановить сохраненные ширины, используем авто-размер
-                self.main_window.current_box_table.resizeColumnsToContents()
+                # Если не удалось восстановить сохраненные ширины, используем авто-размер (один раз)
+                if not self._box_table_resized:
+                    self.main_window.current_box_table.resizeColumnsToContents()
+                    self._box_table_resized = True
         else:
-            # Если нет сохраненных настроек, используем авто-размер
-            self.main_window.current_box_table.resizeColumnsToContents()
+            # Если нет сохраненных настроек, используем авто-размер только один раз
+            if not self._box_table_resized:
+                self.main_window.current_box_table.resizeColumnsToContents()
+                self._box_table_resized = True
         # Устанавливаем фиксированный режим для вертикального заголовка, чтобы сохранить нашу высоту строк
         self.main_window.current_box_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
 
@@ -1775,6 +1783,13 @@ QLineEdit:focus {{
         header.setStyleSheet("QHeaderView::section { padding: 4px; }")
 
         # Заполняем данные
+        # Оптимизация: batch-загрузка имён одним запросом вместо N+1
+        try:
+            from database import get_product_names_by_barcodes
+            product_names_cache = get_product_names_by_barcodes(list(all_barcodes))
+        except Exception:
+            product_names_cache = {}
+
         row = 0
         for barcode in sorted(all_barcodes):
             data = shipment_data[barcode]
@@ -1788,13 +1803,8 @@ QLineEdit:focus {{
             sku_item = QTableWidgetItem(data['sku'])
             self.main_window.shipment_table.setItem(row, 1, sku_item)
 
-            # Имя товара (из БД)
-            try:
-                from database import get_product_names_by_barcodes
-                product_names = get_product_names_by_barcodes([barcode])
-                name = product_names.get(barcode, "")
-            except:
-                name = ""
+            # Имя товара (из кэша batch-запроса)
+            name = product_names_cache.get(barcode, "")
             name_item = QTableWidgetItem(name)
             self.main_window.shipment_table.setItem(row, 2, name_item)
 
@@ -1932,8 +1942,8 @@ QLineEdit:focus {{
             if item:
                 barcode = item.text()
 
-                # Получаем виджет с кнопкой из ячейки (столбец 5)
-                action_widget = self.main_window.shipment_table.cellWidget(row, 5)
+                # Получаем виджет с кнопкой из ячейки (столбец 6)
+                action_widget = self.main_window.shipment_table.cellWidget(row, 6)
 
                 # Получаем оставшееся количество
                 shipment_item = shipment_items_dict.get(barcode)
@@ -1943,9 +1953,9 @@ QLineEdit:focus {{
 
                     # Если виджет существует, обновляем стиль кнопки
                     if action_widget and isinstance(action_widget, QWidget):
-                        # Находим кнопку в виджете
-                        add_btn = action_widget.findChild(QPushButton)
-                        qty_edit = action_widget.findChild(QLineEdit)
+                        # Оптимизация: используем кэшированные ссылки вместо findChild
+                        add_btn = getattr(action_widget, 'add_btn', None)
+                        qty_edit = getattr(action_widget, 'qty_lineedit', None)
                         if add_btn:
                             if is_disabled and add_btn.isEnabled():
                                 add_btn.setEnabled(False)

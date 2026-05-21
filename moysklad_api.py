@@ -574,23 +574,16 @@ class MoyskladAPI:
             logger.debug(f"Выбранные склады: {store_ids}")
             logger.info(f"Начинаем получение остатков для {len(valid_barcodes)} штрихкодов")
 
-            # Сначала получаем товары по штрихкодам
-            products_map = {}
-            for barcode in valid_barcodes:
-                logger.debug(f"Ищем товар по штрихкоду: {barcode}")
-                product = self._find_product_by_barcode(barcode)
-                if product:
-                    product_id = product['id']
-                    logger.debug(f"Товар найден: {product.get('name', 'Unknown')}, ID: {product_id}")
-                    products_map[barcode] = product_id
-                else:
-                    logger.warning(f"Товар не найден для штрихкода: {barcode}")
+            # Batch-поиск товаров по штрихкодам (вместо цикла по одному)
+            products_map = self._find_products_by_barcodes(valid_barcodes)
+            moysklad_logger.info(f"Найдено {len(products_map)} товаров из {len(valid_barcodes)} штрихкодов")
 
             if not products_map:
                 logger.warning("Не найдено ни одного товара для указанных штрихкодов")
                 return {}
 
             # Формируем параметры запроса для получения остатков
+            products_map = {bc: p['id'] for bc, p in products_map.items()}
             product_ids = list(products_map.values())
             logger.info(f"Найдено {len(product_ids)} товаров для получения остатков")
 
@@ -672,6 +665,67 @@ class MoyskladAPI:
             logger.error(f"Ошибка при получении остатков по складам: {e}")
             raise
     
+    def _find_products_by_barcodes(self, barcodes: List[str]) -> Dict[str, Dict]:
+        """
+        Batch-поиск товаров по множеству штрихкодов одним запросом.
+        Использует filter=barcode=BC1;barcode=BC2 для получения всех товаров сразу.
+        Fallback на индивидуальный поиск для ненайденных.
+
+        Args:
+            barcodes: Список штрихкодов
+
+        Returns:
+            Dict[barcode -> product_dict]
+        """
+        results = {}
+        if not barcodes:
+            return results
+
+        # Batch-запрос: filter=barcode=BC1;barcode=BC2;...
+        # МойСклад поддерживает до 1000 значений в filter
+        batch_size = 100
+        remaining_barcodes = list(barcodes)
+
+        while remaining_barcodes:
+            batch = remaining_barcodes[:batch_size]
+            remaining_barcodes = remaining_barcodes[batch_size:]
+
+            # Формируем фильтр: barcode=BC1;barcode=BC2;...
+            filter_parts = [f"barcode={bc}" for bc in batch]
+            filter_str = ";".join(filter_parts)
+
+            url = f"{self.base_url}/entity/product"
+            params = {'filter': filter_str, 'limit': 1000}
+
+            try:
+                response = self._make_request('GET', url, params=params)
+                if response.status_code == 200:
+                    data = response.json()
+                    rows = data.get('rows', [])
+                    for product in rows:
+                        # Ищем匹配的 штрихкод в продукте
+                        product_barcodes = []
+                        if 'barcodes' in product:
+                            for bc_obj in product['barcodes']:
+                                for field_value in bc_obj.values():
+                                    product_barcodes.append(str(field_value))
+
+                        for bc in batch:
+                            if bc in product_barcodes:
+                                results[bc] = product
+                                break
+            except Exception as e:
+                logger.warning(f"Batch поиск по штрихкодам не удался: {e}")
+
+            # Для ненайденных в batch пробуем индивидуальный поиск
+            for bc in batch:
+                if bc not in results:
+                    product = self._find_product_by_barcode(bc)
+                    if product:
+                        results[bc] = product
+
+        return results
+
     def _find_product_by_barcode(self, barcode: str) -> Optional[Dict]:
         """
         Найти товар по штрихкоду (любой формат)

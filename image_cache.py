@@ -5,13 +5,16 @@ from PyQt6.QtGui import QPixmap, QIcon
 from PyQt6.QtCore import Qt, QSize
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+from collections import OrderedDict
 import logging
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_MAX_CACHE_SIZE = 500  # Максимум элементов в каждом кэше
+
 
 class ImageCache:
-    """Кэш для хранения и повторного использования изображений"""
+    """LRU-кэш для хранения и повторного использования изображений"""
     
     _instance: Optional['ImageCache'] = None
     _initialized: bool = False
@@ -21,12 +24,13 @@ class ImageCache:
             cls._instance = super().__new__(cls)
         return cls._instance
     
-    def __init__(self):
+    def __init__(self, max_size: int = _DEFAULT_MAX_CACHE_SIZE):
         if not self._initialized:
-            self._pixmap_cache: Dict[str, QPixmap] = {}
-            self._icon_cache: Dict[str, QIcon] = {}
+            self._max_size = max_size
+            self._pixmap_cache: OrderedDict[str, QPixmap] = OrderedDict()
+            self._icon_cache: OrderedDict[str, QIcon] = OrderedDict()
             self._initialized = True
-            logger.debug("ImageCache инициализирован")
+            logger.debug(f"ImageCache инициализирован (max_size={max_size})")
     
     @classmethod
     def get_instance(cls) -> 'ImageCache':
@@ -39,6 +43,11 @@ class ImageCache:
         self._icon_cache.clear()
         logger.debug("ImageCache очищен")
     
+    def _evict_lru(self, cache: OrderedDict, max_size: int) -> None:
+        """Удаляет наименее используемые элементы если кэш переполнен"""
+        while len(cache) > max_size:
+            cache.popitem(last=False)
+    
     def get_pixmap(
         self, 
         path: Path, 
@@ -47,22 +56,13 @@ class ImageCache:
         smooth_transform: bool = True
     ) -> QPixmap:
         """
-        Получить QPixmap из кэша или загрузить и закэшировать
-        
-        Args:
-            path: Путь к файлу изображения
-            size: Размер (ширина, высота)
-            keep_aspect_ratio: Сохранять соотношение сторон
-            smooth_transform: Использовать сглаживание
-            
-        Returns:
-            QPixmap с указанным размером
+        Получить QPixmap из LRU-кэша или загрузить и закэшировать
         """
-        # Создаем уникальный ключ для кэша
         cache_key = f"{str(path)}_{size[0]}x{size[1]}_{keep_aspect_ratio}"
         
-        # Проверяем кэш
+        # Проверяем кэш (move_to_end для LRU)
         if cache_key in self._pixmap_cache:
+            self._pixmap_cache.move_to_end(cache_key)
             return self._pixmap_cache[cache_key]
         
         # Загружаем изображение
@@ -71,30 +71,28 @@ class ImageCache:
             
             if pixmap.isNull():
                 logger.warning(f"Не удалось загрузить изображение: {path}")
-                # Возвращаем пустой pixmap запрошенного размера
                 empty_pixmap = QPixmap(size[0], size[1])
                 empty_pixmap.fill(Qt.GlobalColor.transparent)
                 self._pixmap_cache[cache_key] = empty_pixmap
+                self._evict_lru(self._pixmap_cache, self._max_size)
                 return empty_pixmap
             
-            # Масштабируем
             aspect_ratio = Qt.AspectRatioMode.KeepAspectRatio if keep_aspect_ratio else Qt.AspectRatioMode.IgnoreAspectRatio
             transform_mode = Qt.TransformationMode.SmoothTransformation if smooth_transform else Qt.TransformationMode.FastTransformation
             
             scaled_pixmap = pixmap.scaled(size[0], size[1], aspect_ratio, transform_mode)
             
-            # Кэшируем
             self._pixmap_cache[cache_key] = scaled_pixmap
-            logger.debug(f"Закэширован pixmap: {cache_key}")
+            self._evict_lru(self._pixmap_cache, self._max_size)
             
             return scaled_pixmap
             
         except Exception as e:
             logger.error(f"Ошибка при загрузке pixmap {path}: {e}")
-            # Возвращаем пустой pixmap
             empty_pixmap = QPixmap(size[0], size[1])
             empty_pixmap.fill(Qt.GlobalColor.transparent)
             self._pixmap_cache[cache_key] = empty_pixmap
+            self._evict_lru(self._pixmap_cache, self._max_size)
             return empty_pixmap
     
     def get_icon(
@@ -103,30 +101,19 @@ class ImageCache:
         size: Tuple[int, int] = (20, 20)
     ) -> QIcon:
         """
-        Получить QIcon из кэша или загрузить и закэшировать
-        
-        Args:
-            path: Путь к файлу изображения
-            size: Размер иконки
-            
-        Returns:
-            QIcon с указанным размером
+        Получить QIcon из LRU-кэша или загрузить и закэшировать
         """
         cache_key = f"{str(path)}_{size[0]}x{size[1]}"
         
-        # Проверяем кэш
         if cache_key in self._icon_cache:
+            self._icon_cache.move_to_end(cache_key)
             return self._icon_cache[cache_key]
         
-        # Получаем pixmap
         pixmap = self.get_pixmap(path, size)
-        
-        # Создаем иконку
         icon = QIcon(pixmap)
         
-        # Кэшируем
         self._icon_cache[cache_key] = icon
-        logger.debug(f"Закэширована иконка: {cache_key}")
+        self._evict_lru(self._icon_cache, self._max_size)
         
         return icon
     

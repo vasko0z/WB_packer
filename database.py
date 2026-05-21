@@ -3,16 +3,24 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
+from collections import OrderedDict
 import config  # Добавляем импорт config
 from db_connection import execute_query, execute_many, get_connection, _release_connection, get_db_type
 # PostgreSQL is the only supported database
 
 logger = logging.getLogger(__name__)
 
-
-_product_names_cache: Dict[str, str] = {}
-_product_names_cache_ttl: Dict[str, float] = {}
+# LRU-кэш наименований товаров с лимитом
+_PRODUCT_NAMES_CACHE_MAX = 5000
 _PRODUCT_NAMES_CACHE_SECONDS = 60
+_product_names_cache: OrderedDict[str, str] = OrderedDict()
+_product_names_cache_ttl: OrderedDict[str, float] = OrderedDict()
+
+def _evict_cache(cache: OrderedDict, ttl_cache: OrderedDict, max_size: int) -> None:
+    """Удаляет наименее используемые элементы из кэша"""
+    while len(cache) > max_size:
+        key, _ = cache.popitem(last=False)
+        ttl_cache.pop(key, None)
 
 def clear_product_names_cache() -> None:
     """Очищает кэш наименований товаров (вызывается после обновления SKU)"""
@@ -26,28 +34,27 @@ def get_product_names_by_barcodes(barcodes: List[str]) -> Dict[str, str]:
    Возвращает словарь {штрихкод: наименование}
    Отдаёт приоритет данным из таблицы sku, при их отсутствии использует shipment_items
    Кэширует результаты для уменьшения запросов к удалённой БД
+   Оптимизация: сначала простой запрос по точному совпадению (использует индекс),
+   затем fallback с REPLACE только для ненайденных.
    """
    global _product_names_cache, _product_names_cache_ttl
    try:
        if not barcodes:
-           return {}
+          return {}
 
        import time
        now = time.time()
        
-       # Нормализуем входные баркоды: убираем пробелы и дефисы
        normalized_barcodes = []
        for bc in barcodes:
            nb = bc.replace(" ", "").replace("-", "").replace("\t", "") if bc else bc
            normalized_barcodes.append(nb)
        
-       # Проверяем кэш — берём только те штрихкоды, которых нет в кэше или устарели
        uncached_barcodes = []
        for bc in normalized_barcodes:
            if bc not in _product_names_cache or (bc in _product_names_cache_ttl and now - _product_names_cache_ttl[bc] > _PRODUCT_NAMES_CACHE_SECONDS):
                uncached_barcodes.append(bc)
        
-       # Если всё в кэше — возвращаем из кэша
        result = {}
        if not uncached_barcodes:
            for bc in normalized_barcodes:
@@ -55,96 +62,109 @@ def get_product_names_by_barcodes(barcodes: List[str]) -> Dict[str, str]:
                    result[bc] = _product_names_cache[bc]
            return result
        
-       # Запрашиваем только отсутствующие в кэше
-       placeholders = ','.join(['%s'] * len(uncached_barcodes))
-
        db_type = get_db_type()
-       
-       if db_type == "sqlite":
-            placeholders = ','.join(['?'] * len(uncached_barcodes))
-            query = f"""
-                SELECT barcode, MIN(name) as name
-                FROM (
-                    SELECT barcode, name, 1 as priority
-                    FROM sku
-                    WHERE REPLACE(REPLACE(REPLACE(barcode, ' ', ''), '-', ''), '	', '') IN ({placeholders})
-                    AND name IS NOT NULL
-                    AND name != ''
+       placeholder = "%s" if db_type != "sqlite" else "?"
+       placeholders = ','.join([placeholder] * len(uncached_barcodes))
 
-                    UNION ALL
+       # Этап 1: Быстрый запрос по точному совпадению (использует индекс)
+       query1 = f"""
+           SELECT DISTINCT ON (barcode) barcode, name
+           FROM (
+               SELECT barcode, name, 1 as priority FROM sku
+               WHERE barcode IN ({placeholders}) AND name IS NOT NULL AND name != ''
+               UNION ALL
+               SELECT si.barcode, si.sku as name, 2 as priority FROM shipment_items si
+               WHERE si.barcode IN ({placeholders}) AND si.sku IS NOT NULL AND si.sku != ''
+               AND NOT EXISTS (SELECT 1 FROM sku s WHERE s.barcode = si.barcode AND s.name IS NOT NULL AND s.name != '')
+           ) AS combined
+           ORDER BY barcode, priority
+       """
+       params1 = uncached_barcodes * 2
+       results1 = execute_query(query1, params1, fetchall=True)
 
-                    SELECT si.barcode, si.sku as name, 2 as priority
-                    FROM shipment_items si
-                    WHERE REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '	', '') IN ({placeholders})
-                    AND si.sku IS NOT NULL
-                    AND si.sku != ''
-                    AND NOT EXISTS (
-                        SELECT 1 FROM sku s
-                        WHERE REPLACE(REPLACE(REPLACE(s.barcode, ' ', ''), '-', ''), '	', '') = REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '	', '')
-                        AND s.name IS NOT NULL
-                        AND s.name != ''
-                    )
-                ) AS combined
-                GROUP BY barcode
-                ORDER BY barcode
-            """
-       else:
-           query = f"""
-                SELECT DISTINCT ON (barcode) barcode, name
-                FROM (
-                    SELECT barcode, name, 1 as priority
-                    FROM sku
-                    WHERE REPLACE(REPLACE(REPLACE(barcode, ' ', ''), '-', ''), '\t', '') IN ({placeholders})
-                    AND name IS NOT NULL
-                    AND name != ''
-
-                    UNION ALL
-
-                    SELECT si.barcode, si.sku as name, 2 as priority
-                    FROM shipment_items si
-                    WHERE REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '\t', '') IN ({placeholders})
-                    AND si.sku IS NOT NULL
-                    AND si.sku != ''
-                    AND NOT EXISTS (
-                        SELECT 1 FROM sku s
-                        WHERE REPLACE(REPLACE(REPLACE(s.barcode, ' ', ''), '-', ''), '\t', '') = REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '\t', '')
-                        AND s.name IS NOT NULL
-                        AND s.name != ''
-                    )
-                ) AS combined
-                ORDER BY barcode, priority
-            """
-
-       results = execute_query(query, uncached_barcodes * 2, fetchall=True)
-
+       found_barcodes = set()
        name_dict = {}
-       for barcode, name in results:
+       for barcode, name in (results1 or []):
            if barcode and name:
-               # Нормализуем баркод из результата
                nb = barcode.replace(" ", "").replace("-", "").replace("\t", "") if barcode else barcode
                name_dict[nb] = name
-               _product_names_cache[nb] = name
-               _product_names_cache_ttl[nb] = now
+               found_barcodes.add(nb)
 
-       # Добавляем кэшированные значения
+       # Этап 2: Fallback с REPLACE только для ненайденных
+       missing = [bc for bc in uncached_barcodes if bc not in found_barcodes]
+       if missing:
+           placeholders2 = ','.join([placeholder] * len(missing))
+           if db_type == "sqlite":
+               query2 = f"""
+                   SELECT barcode, MIN(name) as name
+                   FROM (
+                       SELECT barcode, name, 1 as priority FROM sku
+                       WHERE REPLACE(REPLACE(REPLACE(barcode, ' ', ''), '-', ''), '	', '') IN ({placeholders2})
+                       AND name IS NOT NULL AND name != ''
+                       UNION ALL
+                       SELECT si.barcode, si.sku as name, 2 as priority FROM shipment_items si
+                       WHERE REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '	', '') IN ({placeholders2})
+                       AND si.sku IS NOT NULL AND si.sku != ''
+                       AND NOT EXISTS (
+                           SELECT 1 FROM sku s
+                           WHERE REPLACE(REPLACE(REPLACE(s.barcode, ' ', ''), '-', ''), '	', '') = REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '	', '')
+                           AND s.name IS NOT NULL AND s.name != ''
+                       )
+                   ) AS combined
+                   GROUP BY barcode
+                   ORDER BY barcode
+               """
+           else:
+               query2 = f"""
+                   SELECT DISTINCT ON (barcode) barcode, name
+                   FROM (
+                       SELECT barcode, name, 1 as priority FROM sku
+                       WHERE REPLACE(REPLACE(REPLACE(barcode, ' ', ''), '-', ''), '\t', '') IN ({placeholders2})
+                       AND name IS NOT NULL AND name != ''
+                       UNION ALL
+                       SELECT si.barcode, si.sku as name, 2 as priority FROM shipment_items si
+                       WHERE REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '\t', '') IN ({placeholders2})
+                       AND si.sku IS NOT NULL AND si.sku != ''
+                       AND NOT EXISTS (
+                           SELECT 1 FROM sku s
+                           WHERE REPLACE(REPLACE(REPLACE(s.barcode, ' ', ''), '-', ''), '\t', '') = REPLACE(REPLACE(REPLACE(si.barcode, ' ', ''), '-', ''), '\t', '')
+                           AND s.name IS NOT NULL AND s.name != ''
+                       )
+                   ) AS combined
+                   ORDER BY barcode, priority
+               """
+           results2 = execute_query(query2, missing * 2, fetchall=True)
+           for barcode, name in (results2 or []):
+               if barcode and name:
+                   nb = barcode.replace(" ", "").replace("-", "").replace("\t", "") if barcode else barcode
+                   name_dict[nb] = name
+
+       for nb, name in name_dict.items():
+           _product_names_cache[nb] = name
+           _product_names_cache.move_to_end(nb)
+           _product_names_cache_ttl[nb] = now
+
        for bc in normalized_barcodes:
            if bc in _product_names_cache and bc not in name_dict:
                name_dict[bc] = _product_names_cache[bc]
+               _product_names_cache.move_to_end(bc)
 
-       # Логируем баркоды без имени для отладки
-       missing = [bc for bc in normalized_barcodes if bc not in name_dict and bc]
-       if missing:
-           logger.warning(f"Не найдены наименования для {len(missing)} баркодов: {missing[:10]}{'...' if len(missing) > 10 else ''}")
+       _evict_cache(_product_names_cache, _product_names_cache_ttl, _PRODUCT_NAMES_CACHE_MAX)
+
+       missing_final = [bc for bc in normalized_barcodes if bc not in name_dict and bc]
+       if missing_final:
+           logger.warning(f"Не найдены наименования для {len(missing_final)} баркодов: {missing_final[:10]}{'...' if len(missing_final) > 10 else ''}")
 
        return name_dict
    except Exception as e:
        logger.error(f"Ошибка при получении наименований по штрихкодам: {e}", exc_info=True)
-       return {}
+       return {}
 
 
-_stock_qty_cache: Dict[str, Optional[int]] = {}
-_stock_qty_cache_ttl: Dict[str, float] = {}
+_STOCK_QTY_CACHE_MAX = 5000
 _STOCK_QTY_CACHE_SECONDS = 60
+_stock_qty_cache: OrderedDict[str, Optional[int]] = OrderedDict()
+_stock_qty_cache_ttl: OrderedDict[str, float] = OrderedDict()
 
 def get_stock_cache(barcode: str) -> Optional[int]:
     """Получает кэшированное количество остатков для штрихкода (с локальным кэшем)"""
@@ -153,6 +173,7 @@ def get_stock_cache(barcode: str) -> Optional[int]:
     now = time.time()
     if barcode in _stock_qty_cache and barcode in _stock_qty_cache_ttl:
         if now - _stock_qty_cache_ttl[barcode] < _STOCK_QTY_CACHE_SECONDS:
+            _stock_qty_cache.move_to_end(barcode)
             return _stock_qty_cache[barcode]
     try:
         result = execute_query(
@@ -162,39 +183,243 @@ def get_stock_cache(barcode: str) -> Optional[int]:
         )
         qty = result[0] if result else None
         _stock_qty_cache[barcode] = qty
+        _stock_qty_cache.move_to_end(barcode)
         _stock_qty_cache_ttl[barcode] = now
+        _evict_cache(_stock_qty_cache, _stock_qty_cache_ttl, _STOCK_QTY_CACHE_MAX)
         return qty
     except Exception as e:
         logger.error(f"Ошибка получения кэша остатков для {barcode}: {e}")
         return None
 
 
-def set_stock_cache(barcode: str, quantity: Optional[int]) -> None:
-   """Обновляет кэшированное количество остатков для штрихкода"""
-   try:
-       db_type = get_db_type()
-       if db_type == "sqlite":
-           execute_query(
-               """
-               INSERT OR REPLACE INTO stock_cache (barcode, quantity)
-               VALUES (?, ?)
-               """,
-               (barcode, quantity)
-           )
-       else:
-           execute_query(
-               """
-               INSERT INTO stock_cache (barcode, quantity)
-               VALUES (%s, %s)
-               ON CONFLICT (barcode) DO UPDATE SET quantity = EXCLUDED.quantity
-               """,
-               (barcode, quantity)
-           )
-   except Exception as e:
-       logger.error(f"Ошибка обновления кэша остатков для {barcode}: {e}")
+def get_stock_cache_batch(barcodes: List[str]) -> Dict[str, Optional[int]]:
+    """Batch-загрузка остатков для множества штрихкодов одним запросом"""
+    import time
+    now = time.time()
+    result = {}
 
+    uncached = []
+    for bc in barcodes:
+        if bc in _stock_qty_cache and bc in _stock_qty_cache_ttl:
+            if now - _stock_qty_cache_ttl[bc] < _STOCK_QTY_CACHE_SECONDS:
+                _stock_qty_cache.move_to_end(bc)
+                result[bc] = _stock_qty_cache[bc]
+                continue
+        uncached.append(bc)
+
+    if not uncached:
+        return result
+
+    try:
+        db_type = get_db_type()
+        placeholder = "?" if db_type == "sqlite" else "%s"
+        placeholders = ','.join([placeholder] * len(uncached))
+        rows = execute_query(
+            f"SELECT barcode, quantity FROM stock_cache WHERE barcode IN ({placeholders})",
+            tuple(uncached),
+            fetchall=True
+        )
+        db_map = {row[0]: row[1] for row in rows} if rows else {}
+
+        for bc in uncached:
+            qty = db_map.get(bc)
+            _stock_qty_cache[bc] = qty
+            _stock_qty_cache.move_to_end(bc)
+            _stock_qty_cache_ttl[bc] = now
+            result[bc] = qty
+
+        for bc in uncached:
+            if bc not in result:
+                result[bc] = None
+                _stock_qty_cache[bc] = None
+                _stock_qty_cache.move_to_end(bc)
+                _stock_qty_cache_ttl[bc] = now
+
+        _evict_cache(_stock_qty_cache, _stock_qty_cache_ttl, _STOCK_QTY_CACHE_MAX)
+    except Exception as e:
+        logger.error(f"Ошибка batch-загрузки остатков: {e}")
+        for bc in uncached:
+            result[bc] = None
+
+    return result
+
+
+def set_stock_cache(barcode: str, quantity: Optional[int]) -> None:
+    """Обновляет кэшированное количество остатков для штрихкода"""
+    try:
+        db_type = get_db_type()
+        if db_type == "sqlite":
+            execute_query(
+                """
+                INSERT OR REPLACE INTO stock_cache (barcode, quantity)
+                VALUES (?, ?)
+                """,
+                (barcode, quantity)
+            )
+        else:
+            execute_query(
+                """
+                INSERT INTO stock_cache (barcode, quantity)
+                VALUES (%s, %s)
+                ON CONFLICT (barcode) DO UPDATE SET quantity = EXCLUDED.quantity
+                """,
+                (barcode, quantity)
+            )
+    except Exception as e:
+        logger.error(f"Ошибка обновления кэша остатков для {barcode}: {e}")
+
+
+# Глобальный флаг: схема БД уже проверена и актуальна
+_schema_initialized = False
 
 def init_db():
+   global _schema_initialized
+   # Если схема уже инициализирована, пропускаем тяжёлые проверки
+   if _schema_initialized:
+       try:
+           conn = get_connection()
+           db_type = get_db_type()
+           use_sqlite = db_type == "sqlite"
+           cursor = conn.cursor()
+           # Быстрая проверка: создаём таблицы если их нет (CREATE IF NOT EXISTS — дёшево)
+           int_type = "INTEGER" if use_sqlite else "SERIAL"
+           str_type = "TEXT"
+           bool_type = "INTEGER DEFAULT 0" if use_sqlite else "BOOLEAN DEFAULT FALSE"
+           empty_json = "'{}'"
+           autoincrement = "AUTOINCREMENT" if use_sqlite else ""
+
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS shipments (
+                   id {int_type} PRIMARY KEY {autoincrement},
+                   destination_name {str_type} NOT NULL UNIQUE,
+                   font_size INTEGER DEFAULT 10,
+                   label_font_size INTEGER DEFAULT 20,
+                   theme {str_type} DEFAULT 'Светлая',
+                   removed_items TEXT DEFAULT {empty_json},
+                   parent_group {str_type} DEFAULT NULL,
+                   properties TEXT DEFAULT {empty_json},
+                   archived {bool_type},
+                   archived_date TIMESTAMP DEFAULT NULL,
+                   archived_by {str_type} DEFAULT NULL
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS shipment_items (
+                   id {int_type} PRIMARY KEY {autoincrement},
+                   shipment_id INTEGER NOT NULL,
+                   barcode {str_type} NOT NULL,
+                   sku {str_type} NOT NULL,
+                   total_qty INTEGER NOT NULL,
+                   allocated_qty INTEGER NOT NULL DEFAULT 0,
+                   FOREIGN KEY (shipment_id) REFERENCES shipments(id) ON DELETE CASCADE
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS boxes (
+                   id {int_type} PRIMARY KEY {autoincrement},
+                   shipment_id INTEGER NOT NULL,
+                   box_id {str_type} NOT NULL,
+                   is_current {bool_type},
+                   FOREIGN KEY (shipment_id) REFERENCES shipments(id) ON DELETE CASCADE,
+                   UNIQUE(shipment_id, box_id)
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS box_items (
+                   id {int_type} PRIMARY KEY {autoincrement},
+                   box_id INTEGER NOT NULL,
+                   barcode {str_type} NOT NULL,
+                   qty INTEGER NOT NULL,
+                   FOREIGN KEY (box_id) REFERENCES boxes(id) ON DELETE CASCADE,
+                   UNIQUE(box_id, barcode)
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS app_settings (
+                   key {str_type} PRIMARY KEY,
+                   value TEXT
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS window_state (
+                   key {str_type} PRIMARY KEY,
+                   value TEXT
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS users (
+                   id {int_type} PRIMARY KEY,
+                   username {str_type} UNIQUE NOT NULL,
+                   font_size INTEGER DEFAULT 10,
+                   label_font_size INTEGER DEFAULT 20,
+                   theme {str_type} DEFAULT 'Светлая',
+                   ok_sound {str_type} DEFAULT 'ok.wav',
+                   error_sound {str_type} DEFAULT 'error.wav',
+                   tone_sound {bool_type},
+                   sound_volume INTEGER DEFAULT 100,
+                   shipment_columns_width TEXT DEFAULT '',
+                   box_columns_width TEXT DEFAULT '',
+                   main_splitter_sizes TEXT DEFAULT '',
+                   window_width INTEGER DEFAULT 1300,
+                   window_height INTEGER DEFAULT 800,
+                   button_primary_color {str_type} DEFAULT '',
+                   button_success_color {str_type} DEFAULT '',
+                   button_warning_color {str_type} DEFAULT '',
+                   button_danger_color {str_type} DEFAULT '',
+                   button_colors TEXT DEFAULT ''
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS user_sessions (
+                   id {int_type} PRIMARY KEY,
+                   shipment_name {str_type} NOT NULL,
+                   username {str_type} NOT NULL,
+                   last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                   UNIQUE (shipment_name, username)
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS stock_cache (
+                   barcode {str_type} PRIMARY KEY,
+                   quantity INTEGER DEFAULT 0,
+                   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS sku (
+                   barcode {str_type} PRIMARY KEY,
+                   name {str_type},
+                   article {str_type},
+                   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS item_locks (
+                   barcode {str_type} NOT NULL,
+                   shipment_id INTEGER NOT NULL,
+                   username {str_type} NOT NULL,
+                   locked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                   expires_at TIMESTAMP NOT NULL,
+                   PRIMARY KEY (barcode, shipment_id)
+               )
+           """)
+           cursor.execute(f"""
+               CREATE TABLE IF NOT EXISTS cache_invalidation (
+                   id {int_type} PRIMARY KEY {autoincrement},
+                   shipment_id INTEGER NOT NULL,
+                   tables_changed TEXT NOT NULL,
+                   invalidated_by {str_type},
+                   invalidated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+               )
+           """)
+           conn.commit()
+           _release_connection(conn)
+           logger.debug("init_db: схема уже инициализирована, быстрая проверка завершена")
+           return
+       except Exception as e:
+           logger.warning(f"init_db: быстрая проверка не удалась, полная инициализация: {e}")
+           _schema_initialized = False
+
    try:
        logger.info("Начало инициализации базы данных")
        conn = get_connection()
@@ -487,6 +712,7 @@ def init_db():
                        pass
 
            logger.info("Инициализация базы данных завершена успешно")
+           _schema_initialized = True
        except Exception as e:
            logger.error(f"Ошибка при инициализации БД: {e}", exc_info=True)
            if not use_sqlite:
@@ -1257,6 +1483,11 @@ _app_settings_cache = {}
 _app_settings_cache_ttl = {}
 _APP_SETTINGS_CACHE_SECONDS = 30
 
+# Оптимизация: TTL-кэш для get_user_settings
+_user_settings_cache = {}
+_user_settings_cache_ttl = {}
+_USER_SETTINGS_CACHE_SECONDS = 30
+
 def get_app_setting(key, default=None):
     global _app_settings_cache, _app_settings_cache_ttl
     import time
@@ -1424,6 +1655,15 @@ def set_moysklad_enabled(enabled: bool) -> bool:
 
 
 def get_user_settings(username):
+    global _user_settings_cache, _user_settings_cache_ttl
+    import time
+    now = time.time()
+    
+    # Проверяем кэш
+    if username in _user_settings_cache and username in _user_settings_cache_ttl:
+        if now - _user_settings_cache_ttl[username] < _USER_SETTINGS_CACHE_SECONDS:
+            return _user_settings_cache[username]
+    
     try:
         db_type = get_db_type()
         placeholder = "?" if db_type == "sqlite" else "%s"
@@ -1494,6 +1734,9 @@ def get_user_settings(username):
             }
             logger.debug(f"get_user_settings({username}): moysklad_enabled={result[16]} (type={type(result[16])}), преобразовано в {settings_dict['moysklad_enabled']}")
             logger.debug(f"get_user_settings({username}): moysklad_enabled={settings_dict['moysklad_enabled']}, moysklad_token={'настроен' if settings_dict['moysklad_token'] else 'не настроен'}")
+            # Сохраняем в кэш
+            _user_settings_cache[username] = settings_dict
+            _user_settings_cache_ttl[username] = now
             return settings_dict
         logger.debug(f"get_user_settings({username}): настройки не найдены в БД")
         return None
@@ -1651,7 +1894,11 @@ def set_user_settings(username, font_size, label_font_size, theme, ok_sound, err
                  encoded_moysklad_token, encoded_moysklad_stores, moysklad_enabled_bool, shipment_locking_enabled_bool,
                  article_column_visible_bool, name_column_visible_bool, total_qty_column_visible_bool, stock_column_visible_bool, hide_completed_items_bool,
                  cached_server_ip, colored_buttons_bool, encoded_button_colors)
-            )
+             )
+        # Инвалидируем кэш настроек пользователя
+        global _user_settings_cache, _user_settings_cache_ttl
+        _user_settings_cache.pop(username, None)
+        _user_settings_cache_ttl.pop(username, None)
     except Exception as e:
         logger.error(f"Ошибка сохранения настроек пользователя {username}: {e}", exc_info=True)
 

@@ -10,8 +10,8 @@ from datetime import datetime
 # Версия приложения - обновляется вручную при каждой компиляции!
 VERSION_MAJOR = 1
 VERSION_MINOR = 0
-VERSION_PATCH = 0
-VERSION_BUILD = 82  # Увеличивать на 1 при каждой компиляции
+VERSION_PATCH = 1
+VERSION_BUILD = 84  # Увеличивать на 1 при каждой компиляции
 
 
 def get_version_file_path():

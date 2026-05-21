@@ -230,3 +230,24 @@ logging.basicConfig(level=logging.DEBUG)
    - Через 500мс: сохранение коробки
 4. Закрыть приложение
 5. Проверить в БД что все изменения сохранены
+
+## Оптимизация закрытия программы (21.05.2026)
+
+### Проблема
+При закрытии программы `save_all_shipments()` вызывал полный `save_shipment()` для каждой поставки — UPSERT всех items, boxes, box_items с множеством запросов к удалённой БД. Для 14 подпоставок это занимало ~15 секунд.
+
+### Решение
+Данные уже сохраняются инкрементально во время работы через `_save_current_box_incremental()`. При закрытии нужно только метаданные (архив, свойства, removed_items).
+
+### Изменения
+- **`data_controller.save_shipment_metadata_only()`**: Лёгкое сохранение — 1 UPSERT строки `shipments` вместо десятков запросов
+- **`main_window.save_all_shipments()`**: Теперь вызывает `save_shipment_metadata_only()` вместо `save_shipment()`
+- **Результат**: ~15с → ~1-2с (10x ускорение закрытия)
+
+## Исправление FK Violation при сохранении (21.05.2026)
+
+### Проблема
+`save_shipment()` делал UPSERT `shipments` на одном соединении из пула, но не коммитил его. Затем `execute_many` получал другое соединение, на котором строка `shipments` ещё не видна → foreign key violation.
+
+### Решение
+Добавлен `conn.commit()` после UPSERT `shipments` до вызова `execute_many` для `shipment_items`.

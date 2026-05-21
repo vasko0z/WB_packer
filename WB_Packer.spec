@@ -81,7 +81,7 @@ binaries = []
 try:
     from PyInstaller.utils.hooks import collect_dynamic_libs
     # PyQt6 — только нужные модули: QtWidgets, QtCore, QtGui, QtPrintSupport
-    for pkg in ['pandas', 'numpy', 'psycopg2', 'sqlalchemy', 'PIL', 'reportlab', 'psutil']:
+    for pkg in ['pandas', 'numpy', 'psycopg2', 'sqlalchemy', 'PIL', 'reportlab', 'psutil', 'pymupdf']:
         try:
             pkg_binaries = collect_dynamic_libs(pkg)
             binaries.extend(pkg_binaries)
@@ -130,6 +130,7 @@ a = Analysis(
         'backports',
         # Tkinter (для labelprint)
         'tkinter', 'tkinter.ttk', 'tkinter.scrolledtext', 'tkinter.messagebox', 'tkinter.filedialog',
+        'pymupdf', 'fitz',
         # Локальные модули
         'database', 'db_connection', 'models', 'utils', 'version', 'config',
         'app_constants', 'themes', 'dialogs', 'common_utils',
@@ -193,7 +194,6 @@ a = Analysis(
         'win32com', 'pywin32', 'pywin',
         'lxml', 'bs4', 'soupsieve',
         'docx', 'python-docx',
-        'fitz', 'pymupdf',
         'pytesseract',
         'google.protobuf', 'protobuf',
         'ml_dtypes',

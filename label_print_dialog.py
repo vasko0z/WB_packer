@@ -112,65 +112,22 @@ def print_pdf(pdf_path, use_acrobat=False):
 
 def _print_pdf_fallback(pdf_path, use_acrobat=False):
     """
-    Резервный метод печати PDF файла на случай, если PyMuPDF недоступен.
+    Резервный метод печати PDF через os.startfile (без сторонних программ).
     """
     if not os.path.exists(pdf_path):
         QMessageBox.critical(None, "Ошибка", f"PDF файл не найден: {pdf_path}")
         return False
-        
+    
     abs_pdf_path = os.path.abspath(pdf_path)
     
     if sys.platform.startswith('win'):
-        # Метод 1: os.startfile с "print" - самый надёжный на Windows
         try:
             os.startfile(abs_pdf_path, "print")
             return True
-        except OSError:
-            pass
-        
-        # Метод 2: Пробуем известные PDF-ридеры с флагом тихой печати
-        pdf_readers = [
-            (r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe", ["/t"]),
-            (r"C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe", ["/t"]),
-            (r"C:\Program Files\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe", ["/t"]),
-            (r"C:\Program Files\Foxit Software\Foxit PDF Reader\FoxitPDFReader.exe", ["/t"]),
-            (r"C:\Program Files (x86)\Foxit Software\Foxit PDF Reader\FoxitPDFReader.exe", ["/t"]),
-            (r"C:\Program Files\SumatraPDF\SumatraPDF.exe", ["-print-to-default", "-silent"]),
-            (r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe", ["-print-to-default", "-silent"]),
-        ]
-        
-        import subprocess
-        for reader_path, args in pdf_readers:
-            if os.path.exists(reader_path):
-                try:
-                    subprocess.run([reader_path] + args + [abs_pdf_path], timeout=10)
-                    return True
-                except Exception:
-                    continue
-        
-        # Метод 3: ShellExecute как последний вариант
-        try:
-            import win32api
-            result = win32api.ShellExecute(0, "print", abs_pdf_path, None, ".", 0)
-            if result > 32:
-                return True
-        except Exception:
-            pass
-        
-        # Метод 4: Открываем файл для ручной печати
-        try:
-            os.startfile(abs_pdf_path)
-            QMessageBox.warning(None, "Предупреждение", 
-                f"Автоматическая печать не удалась. Файл {os.path.basename(abs_pdf_path)} открыт.\n"
-                f"Пожалуйста, распечатайте его вручную (Ctrl+P).")
-            return True
-        except Exception as e:
+        except OSError as e:
             QMessageBox.critical(None, "Ошибка печати", 
-                f"Не удалось распечатать этикетку: {str(e)}\n\n"
-                f"Убедитесь, что:\n"
-                f"1. Установлен PDF-ридер (Adobe Reader, Foxit, SumatraPDF)\n"
-                f"2. PDF-ридер установлен как приложение по умолчанию для .pdf файлов\n"
-                f"3. Принтер подключён и работает")
+                f"Не удалось распечатать: {str(e)}\n\n"
+                f"Убедитесь, что PDF-ридер установлен как приложение по умолчанию для .pdf")
             return False
     elif sys.platform.startswith('darwin'):
         # Для macOS используем системную команду печати

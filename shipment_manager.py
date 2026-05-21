@@ -253,7 +253,7 @@ class ShipmentManager:
                         if shipment_items_data:
                             from db_connection import execute_many
                             execute_many(
-                                "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES (%s, %s, %s, %s, %s)",
+                                "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES %s",
                                 shipment_items_data
                             )
 
@@ -293,8 +293,9 @@ class ShipmentManager:
                     if box_items_data:
                         from db_connection import execute_many
                         execute_many(
-                            "INSERT INTO box_items (box_id, barcode, qty) VALUES (%s, %s, %s) ON CONFLICT (box_id, barcode) DO UPDATE SET qty = EXCLUDED.qty",
-                            box_items_data
+                            "INSERT INTO box_items (box_id, barcode, qty) VALUES %s ON CONFLICT (box_id, barcode) DO UPDATE SET qty = EXCLUDED.qty",
+                            box_items_data,
+                            template="(%s, %s, %s)"
                         )
                     else:
                         # Для SQLite: batch INSERT shipment_items через executemany

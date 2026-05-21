@@ -667,10 +667,11 @@ def execute_query(query, params=None, fetch=False, fetchone=False, fetchall=Fals
         raise last_error
 
 
-def execute_many(query, params_list):
+def execute_many(query, params_list, template=None):
     """
     Выполняет массовые запросы к базе данных (PostgreSQL или SQLite)
     Автоматически определяет тип БД и адаптирует запрос
+    Для PostgreSQL: template используется для execute_values (напр. "(%s, %s, %s)")
     """
     max_retries = 2
     last_error = None
@@ -723,7 +724,7 @@ def execute_many(query, params_list):
                     # execute_values генерирует один большой INSERT с VALUES (...), (...), ...
                     if psycopg_extras is not None:
                         psycopg_extras.execute_values(
-                            cursor, query, processed_params, page_size=1000
+                            cursor, query, processed_params, template=template, page_size=1000
                         )
                     else:
                         # Fallback: обычный цикл если extras не доступен

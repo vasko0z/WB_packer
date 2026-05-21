@@ -253,8 +253,9 @@ class ShipmentManager:
                         if shipment_items_data:
                             from db_connection import execute_many
                             execute_many(
-                                "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES %s",
-                                shipment_items_data
+                                "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES %s ON CONFLICT (shipment_id, barcode) DO UPDATE SET sku = EXCLUDED.sku, total_qty = EXCLUDED.total_qty, allocated_qty = EXCLUDED.allocated_qty",
+                                shipment_items_data,
+                                template="(%s, %s, %s, %s, %s)"
                             )
 
                         box_id_map = {}

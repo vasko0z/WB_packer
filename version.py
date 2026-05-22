@@ -11,7 +11,7 @@ from datetime import datetime
 VERSION_MAJOR = 1
 VERSION_MINOR = 0
 VERSION_PATCH = 1
-VERSION_BUILD = 1  # Сброс на 0 для новой версии 1.0.1
+VERSION_BUILD = 4  # Сброс на 0 для новой версии 1.0.1
 
 
 def get_version_file_path():

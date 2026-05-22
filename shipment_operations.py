@@ -218,7 +218,7 @@ class ShipmentOperations:
             
             if shipment.shipment_items:
                 group_shipment.add_sub_shipment(sub_destination, shipment)
-                self.main_window.shipment_manager.save_shipment(shipment)
+                self._update_shipment_items_preserving_boxes(sub_destination, shipment)
         
         if group_shipment.sub_shipments:
             self.main_window.group_shipments[group_shipment.group_name] = group_shipment
@@ -227,6 +227,131 @@ class ShipmentOperations:
         else:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self.main_window, "Предупреждение", "Не удалось импортировать товары")
+    
+    def _update_shipment_items_preserving_boxes(self, destination_name, shipment):
+        """Обновляет total_qty товаров поставки, сохраняя существующие коробки и box_items"""
+        from database import get_db_type
+        from db_connection import execute_query, execute_many
+        from models import Box
+        
+        db_type = get_db_type()
+        use_sqlite = db_type == "sqlite"
+        ph = "?" if use_sqlite else "%s"
+        
+        try:
+            shipment_id_result = execute_query(
+                f"SELECT id FROM shipments WHERE destination_name = {ph}",
+                (destination_name,),
+                fetchone=True
+            )
+            if not shipment_id_result:
+                return
+            
+            shipment_id = shipment_id_result[0]
+            
+            existing_items = execute_query(
+                f"SELECT barcode, total_qty FROM shipment_items WHERE shipment_id = {ph}",
+                (shipment_id,),
+                fetchall=True
+            )
+            existing_barcodes = {row[0]: row[1] for row in existing_items} if existing_items else {}
+            
+            boxes_from_db = execute_query(
+                f"SELECT id, box_id FROM boxes WHERE shipment_id = {ph} ORDER BY id",
+                (shipment_id,),
+                fetchall=True
+            )
+            
+            box_items_map = {}
+            if boxes_from_db:
+                box_ids = [b[0] for b in boxes_from_db]
+                placeholders = ','.join([ph] * len(box_ids))
+                all_box_items = execute_query(
+                    f"SELECT box_id, barcode, qty FROM box_items WHERE box_id IN ({placeholders})",
+                    tuple(box_ids),
+                    fetchall=True
+                )
+                if all_box_items:
+                    for bi_row in all_box_items:
+                        bid = bi_row[0]
+                        if bid not in box_items_map:
+                            box_items_map[bid] = {}
+                        box_items_map[bid][bi_row[1]] = bi_row[2]
+            
+            for box_row in boxes_from_db:
+                db_box_id, box_name = box_row[0], box_row[1]
+                box = Box(box_name)
+                if db_box_id in box_items_map:
+                    for bc, qty in box_items_map[db_box_id].items():
+                        normalized_bc = str(bc).replace(" ", "").replace("-", "").replace("\t", "")
+                        if normalized_bc != bc:
+                            execute_query(
+                                f"UPDATE box_items SET barcode = {ph} WHERE box_id = {ph} AND barcode = {ph}",
+                                (normalized_bc, db_box_id, bc)
+                            )
+                        box.items[normalized_bc] = qty
+                shipment.boxes.append(box)
+            
+            if shipment.boxes:
+                shipment.current_box_index = len(shipment.boxes) - 1
+            
+            for item in shipment.shipment_items.values():
+                total_in_boxes = sum(b.items.get(item.barcode, 0) for b in shipment.boxes)
+                item.allocated_qty = total_in_boxes
+            
+            for item in shipment.shipment_items.values():
+                if item.allocated_qty > 0:
+                    execute_query(
+                        f"UPDATE shipment_items SET allocated_qty = {ph}, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = {ph} AND barcode = {ph}",
+                        (item.allocated_qty, shipment_id, item.barcode)
+                    )
+            
+            box_updates = []
+            updates = []
+            inserts = []
+            for item in shipment.shipment_items.values():
+                if item.barcode in existing_barcodes:
+                    if item.total_qty != existing_barcodes[item.barcode]:
+                        updates.append((item.total_qty, shipment_id, item.barcode))
+                else:
+                    sku_val = item.sku.encode('utf-8').decode('utf-8') if isinstance(item.sku, str) else item.sku
+                    inserts.append((shipment_id, item.barcode, sku_val, item.total_qty, item.allocated_qty))
+            
+            if updates:
+                execute_many(
+                    f"UPDATE shipment_items SET total_qty = {ph}, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = {ph} AND barcode = {ph}",
+                    updates,
+                    template=f"({ph}, {ph}, {ph})"
+                )
+            
+            if inserts:
+                execute_many(
+                    f"INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES {ph} ON CONFLICT (shipment_id, barcode) DO UPDATE SET sku = EXCLUDED.sku, total_qty = EXCLUDED.total_qty, allocated_qty = EXCLUDED.allocated_qty, version = shipment_items.version + 1, updated_at = CURRENT_TIMESTAMP",
+                    inserts,
+                    template=f"({ph}, {ph}, {ph}, {ph}, {ph})"
+                )
+            
+            items_to_remove = set(existing_barcodes.keys()) - set(shipment.shipment_items.keys())
+            if items_to_remove:
+                execute_many(
+                    f"DELETE FROM shipment_items WHERE shipment_id = {ph} AND barcode = {ph}",
+                    [(shipment_id, bc) for bc in items_to_remove],
+                    template=f"({ph}, {ph})"
+                )
+                for box in shipment.boxes:
+                    for bc in items_to_remove:
+                        box.items.pop(bc, None)
+                
+                if boxes_from_db:
+                    box_ids_tuple = tuple(b[0] for b in boxes_from_db)
+                    box_placeholders = ','.join([ph] * len(box_ids_tuple))
+                    for bc in items_to_remove:
+                        execute_query(
+                            f"DELETE FROM box_items WHERE box_id IN ({box_placeholders}) AND barcode = {ph}",
+                            (*box_ids_tuple, bc)
+                        )
+        except Exception as e:
+            self.main_window.logger.error(f"Ошибка обновления items без удаления коробок: {e}", exc_info=True)
     
     def create_shipment_from_google_sheets_data(self, result):
         """Создание поставки из данных Google Sheets"""

@@ -58,12 +58,10 @@ class ShipmentManager:
             try:
                 cursor = conn.cursor()
                 try:
-                    # Определяем тип БД и выбираем синтаксис
-                    # Используем фактический тип соединения через get_db_type(),
-                    # так как при fallback с PostgreSQL на SQLite config.DATABASE_TYPE не обновляется
-                    from db_connection import get_db_type
-                    db_type = get_db_type()
-                    use_sqlite = db_type == "sqlite"
+                    # Определяем тип БД по фактическому соединению, а не по db_type,
+                    # так как при fallback с PostgreSQL на SQLite db_type может остаться "postgresql"
+                    from db_connection import is_sqlite_connection
+                    use_sqlite = is_sqlite_connection(conn)
                     
                     # Плейсхолдеры и синтаксис в зависимости от типа БД
                     placeholder = "?" if use_sqlite else "%s"
@@ -163,6 +161,9 @@ class ShipmentManager:
                         self.logger.error(f"Ошибка: shipment_id равен None для поставки {shipment.destination_name}")
                         return  # Прерываем выполнение функции, чтобы избежать ошибки
 
+                    # Коммитим UPSERT shipments, чтобы execute_many мог видеть строку (FK constraint)
+                    conn.commit()
+
                     # Проверяем, что shipment_id существует в таблице
                     cursor.execute(f"SELECT id FROM shipments WHERE id = {placeholder}", (shipment_id,))
                     check_result = cursor.fetchone()
@@ -253,27 +254,27 @@ class ShipmentManager:
                         if shipment_items_data:
                             from db_connection import execute_many
                             execute_many(
-                                "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES %s ON CONFLICT (shipment_id, barcode) DO UPDATE SET sku = EXCLUDED.sku, total_qty = EXCLUDED.total_qty, allocated_qty = EXCLUDED.allocated_qty",
+                                "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES %s ON CONFLICT (shipment_id, barcode) DO UPDATE SET sku = EXCLUDED.sku",
                                 shipment_items_data,
                                 template="(%s, %s, %s, %s, %s)"
                             )
 
-                        box_id_map = {}
+                        # Вставляем коробки
                         for query, params in queries_with_params:
-                            if 'RETURNING id' in query:
-                                # Это вставка коробки, получаем её ID
+                            if 'RETURNING id' not in query:
                                 cursor.execute(query, params)
-                                result = cursor.fetchone()
-                                if result:
-                                    box_id = params[1]  # box_id из параметров
-                                    box_id_map[box_id] = result[0]
-                            else:
-                                cursor.execute(query, params)
-                        
+
+                        # Получаем актуальные ID коробок из БД (надёжнее чем RETURNING id)
+                        cursor.execute(
+                            "SELECT id, box_id FROM boxes WHERE shipment_id = %s",
+                            (shipment_id,)
+                        )
+                        box_id_map = {row[1]: row[0] for row in cursor.fetchall()}
+
                         # Теперь используем box_id_map для вставки box_items
                         for i, box in enumerate(shipment.boxes):
                             box_db_id = box_id_map.get(box.box_id.encode('utf-8').decode('utf-8') if isinstance(box.box_id, str) else box.box_id)
-                            
+
                             if box_db_id:
                                 # Удаляем существующие элементы коробок (если нужно)
                                 if not preserve_box_items:
@@ -298,8 +299,10 @@ class ShipmentManager:
                             box_items_data,
                             template="(%s, %s, %s)"
                         )
-                    else:
-                        # Для SQLite: batch INSERT shipment_items через executemany
+
+                    # SQLite path: выполняем все запросы и вставляем shipment_items/box_items
+                    if use_sqlite:
+                        # batch INSERT shipment_items через executemany
                         if shipment_items_data:
                             cursor.executemany(
                                 "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES (?, ?, ?, ?, ?)",
@@ -833,6 +836,15 @@ class ShipmentManager:
             
             if box_queries:
                 execute_transaction(box_queries)
+            
+            # 5. Обновляем allocated_qty для товаров в текущей коробке
+            for barcode, qty_in_box in current_box.items.items():
+                item = shipment.shipment_items.get(barcode)
+                if item and item.allocated_qty > 0:
+                    execute_query(
+                        f"UPDATE shipment_items SET allocated_qty = {placeholder}, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = {placeholder} AND barcode = {placeholder}",
+                        (item.allocated_qty, shipment_id, barcode)
+                    )
             
             self.logger.debug(f"Коробка {current_box.box_id} инкрементально сохранена ({len(current_box.items)} товаров)")
             

@@ -475,10 +475,32 @@ def get_db_type():
     """
     Получить фактический тип текущей базы данных.
     Возвращает 'sqlite' или 'postgresql' в зависимости от активного соединения.
-    Это важно использовать вместо config.DATABASE_TYPE, так как при fallback
-    с PostgreSQL на SQLite config.DATABASE_TYPE не обновляется.
+    Проверяет фактическое состояние соединений, а не только db_type,
+    так как при fallback с PostgreSQL на SQLite config.DATABASE_TYPE не обновляется.
     """
-    return DatabaseConnection.get_instance().db_type
+    instance = DatabaseConnection.get_instance()
+    # Проверяем фактическое состояние соединений
+    if instance._sqlite_conn is not None and instance.connection_pool is None:
+        return "sqlite"
+    elif instance.connection_pool is not None and instance._sqlite_conn is None:
+        return "postgresql"
+    # Если оба существуют или оба None, используем db_type
+    return instance.db_type
+
+
+def is_sqlite_connection(conn):
+    """Определить тип соединения по фактическому объекту подключения."""
+    if conn is None:
+        return get_db_type() == "sqlite"
+    conn_module = type(conn).__module__ or ""
+    conn_type = type(conn).__name__ or ""
+    # psycopg2 connections have 'closed' attribute
+    if hasattr(conn, 'closed'):
+        return False
+    # sqlite3 connections don't have 'closed' attribute
+    if "sqlite" in conn_module or "sqlite" in conn_type.lower():
+        return True
+    return False
 
 
 def _clear_connection_pool():
@@ -721,8 +743,18 @@ def execute_many(query, params_list, template=None):
                         else:
                             processed_params.append(tuple(params))
 
-                    # execute_values генерирует один большой INSERT с VALUES (...), (...), ...
-                    if psycopg_extras is not None:
+                    # Detect if query uses execute_values format (VALUES %s) or executemany format (VALUES (%s, %s, ...))
+                    import re
+                    values_match = re.search(r'VALUES\s*\(%s', query, re.IGNORECASE)
+                    use_executemany = values_match is not None
+
+                    if use_executemany:
+                        # Query has VALUES (%s, %s, ...) format - use executemany
+                        logger.warning(f"Using executemany for query with VALUES (%s, ...) format")
+                        for params in processed_params:
+                            cursor.execute(query, params)
+                    elif psycopg_extras is not None:
+                        # execute_values format (VALUES %s)
                         psycopg_extras.execute_values(
                             cursor, query, processed_params, template=template, page_size=1000
                         )

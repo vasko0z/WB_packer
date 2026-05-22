@@ -1950,10 +1950,19 @@ class MainWindow(QMainWindow):
             saved_count = 0
             for shipment in self.shipments.values():
                 try:
-                    self.data_controller.save_shipment(shipment)
+                    self.data_controller.save_shipment_metadata_only(shipment)
                     saved_count += 1
                 except Exception as e:
                     self.logger.warning(f"Не удалось сохранить поставку {shipment.destination_name}: {e}")
+            
+            # Сохраняем подпоставки из групповых поставок
+            for group in self.group_shipments.values():
+                for shipment in group.sub_shipments.values():
+                    try:
+                        self.data_controller.save_shipment_metadata_only(shipment)
+                        saved_count += 1
+                    except Exception as e:
+                        self.logger.warning(f"Не удалось сохранить подпоставку {shipment.destination_name}: {e}")
             
             self.logger.info(f"Сохранено {saved_count} поставок при закрытии программы")
         except Exception as e:
@@ -2187,6 +2196,194 @@ class MainWindow(QMainWindow):
         self.logger.error(f"Ошибка обновления из Google Sheets: {error_msg}")
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.critical(self, "Ошибка", f"Ошибка обновления из Google Sheets:\n{error_msg}")
+
+    def save_group_shipment_state(self, group_shipment):
+        """Сохраняет состояние коробок и прогресса групповой поставки в xlsx"""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from datetime import datetime
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить состояние коробок",
+            f"state_{group_shipment.group_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            "Excel Files (*.xlsx)"
+        )
+        if not file_path:
+            return
+        
+        try:
+            import pandas as pd
+            rows = []
+            
+            for sub_name, shipment in group_shipment.sub_shipments.items():
+                display_name = shipment.display_name if hasattr(shipment, 'display_name') else sub_name
+                
+                for i, box in enumerate(shipment.boxes):
+                    if box.items:
+                        for barcode, qty in box.items.items():
+                            item = shipment.shipment_items.get(barcode)
+                            sku = item.sku if item else ""
+                            total_qty = item.total_qty if item else 0
+                            allocated_qty = item.allocated_qty if item else 0
+                            rows.append({
+                                'Поставка': display_name,
+                                'Коробка': box.box_id,
+                                'Штрихкод': barcode,
+                                'Артикул': sku,
+                                'В коробке': qty,
+                                'Всего нужно': total_qty,
+                                'Собрано': allocated_qty,
+                            })
+                    else:
+                        rows.append({
+                            'Поставка': display_name,
+                            'Коробка': box.box_id,
+                            'Штрихкод': '',
+                            'Артикул': '',
+                            'В коробке': 0,
+                            'Всего нужно': 0,
+                            'Собрано': 0,
+                        })
+                
+                for barcode, item in shipment.shipment_items.items():
+                    in_boxes = sum(b.items.get(barcode, 0) for b in shipment.boxes)
+                    if in_boxes == 0 and item.allocated_qty == 0:
+                        rows.append({
+                            'Поставка': display_name,
+                            'Коробка': '(не распределён)',
+                            'Штрихкод': barcode,
+                            'Артикул': item.sku,
+                            'В коробке': 0,
+                            'Всего нужно': item.total_qty,
+                            'Собрано': item.allocated_qty,
+                        })
+            
+            if not rows:
+                QMessageBox.warning(self, "Предупреждение", "Нет данных для сохранения")
+                return
+            
+            df = pd.DataFrame(rows)
+            df.to_excel(file_path, index=False)
+            self.logger.info(f"Состояние групповой поставки сохранено: {file_path}")
+            QMessageBox.information(self, "Готово", f"Состояние сохранено в:\n{file_path}")
+        except Exception as e:
+            self.logger.error(f"Ошибка сохранения состояния: {e}", exc_info=True)
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить состояние:\n{e}")
+
+    def load_group_shipment_state(self, group_shipment):
+        """Загружает состояние коробок и прогресса из xlsx файла"""
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from database import execute_query, get_db_type
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Загрузить состояние коробок",
+            "",
+            "Excel Files (*.xlsx)"
+        )
+        if not file_path:
+            return
+        
+        try:
+            import pandas as pd
+            df = pd.read_excel(file_path)
+            
+            required_cols = ['Поставка', 'Коробка', 'Штрихкод', 'В коробке']
+            missing = [c for c in required_cols if c not in df.columns]
+            if missing:
+                QMessageBox.critical(self, "Ошибка", f"Отсутствуют колонки: {', '.join(missing)}")
+                return
+            
+            display_to_shipment = {}
+            for sub_name, shipment in group_shipment.sub_shipments.items():
+                dn = shipment.display_name if hasattr(shipment, 'display_name') else sub_name
+                display_to_shipment[dn] = shipment
+                shipment.boxes.clear()
+                if shipment.current_box_index >= 0:
+                    shipment.current_box_index = -1
+            
+            restored_boxes = 0
+            restored_items = 0
+            unknown_shipments = set()
+            unknown_items = 0
+            
+            for _, row in df.iterrows():
+                display_name = str(row['Поставка']).strip()
+                box_id = str(row['Коробка']).strip()
+                barcode = str(row['Штрихкод']).strip()
+                barcode = barcode.replace(" ", "").replace("-", "").replace("\t", "")
+                
+                if not barcode or barcode.lower() in ['nan', 'none', ''] or box_id == '(не распределён)':
+                    continue
+                
+                shipment = display_to_shipment.get(display_name)
+                if not shipment:
+                    unknown_shipments.add(display_name)
+                    continue
+                
+                try:
+                    qty_in_box = int(float(row['В коробке']))
+                except (ValueError, TypeError):
+                    continue
+                
+                if qty_in_box <= 0:
+                    continue
+                
+                if barcode not in shipment.shipment_items:
+                    unknown_items += 1
+                    continue
+                
+                box = None
+                for b in shipment.boxes:
+                    if b.box_id == box_id:
+                        box = b
+                        break
+                
+                if not box:
+                    box = Box(box_id)
+                    shipment.boxes.append(box)
+                    if shipment.current_box_index < 0:
+                        shipment.current_box_index = len(shipment.boxes) - 1
+                    restored_boxes += 1
+                
+                box.set_item_qty(barcode, qty_in_box)
+                shipment.shipment_items[barcode].allocated_qty = sum(
+                    b.items.get(barcode, 0) for b in shipment.boxes
+                )
+                restored_items += 1
+            
+            ph = "?" if get_db_type() == "sqlite" else "%s"
+            
+            for shipment in group_shipment.sub_shipments.values():
+                shipment.invalidate_caches()
+                self.data_controller.save_shipment(shipment)
+                sid = getattr(shipment, 'shipment_id', None)
+                if not sid:
+                    continue
+                for item in shipment.shipment_items.values():
+                    if item.allocated_qty > 0:
+                        execute_query(
+                            f"UPDATE shipment_items SET allocated_qty = {ph}, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = {ph} AND barcode = {ph}",
+                            (item.allocated_qty, sid, item.barcode)
+                        )
+            
+            group_shipment.invalidate_caches()
+            self.ui_updater._clear_allocated_qty_cache()
+            self.ui_updater.update_shipments_tree()
+            self.ui_updater.update_group_shipment_summary(group_shipment)
+            self.ui_updater.update_group_shipment_boxes_table(group_shipment)
+            self.ui_updater.update_group_shipment_items_table(group_shipment)
+            self.logger.info(f"Состояние загружено: коробок={restored_boxes}, позиций={restored_items}"
+                           f", неизвестных поставок={len(unknown_shipments)}, пропущено товаров={unknown_items}")
+            msg = f"Загружено:\nКоробок: {restored_boxes}\nПозиций: {restored_items}"
+            if unknown_items:
+                msg += f"\n\n⚠ Пропущено {unknown_items} товаров — не найдены в составе поставки"
+            if unknown_shipments:
+                msg += f"\n\n⚠ Неизвестные поставки ({len(unknown_shipments)}): {', '.join(sorted(unknown_shipments)[:5])}"
+            QMessageBox.information(self, "Готово", msg)
+        except Exception as e:
+            self.logger.error(f"Ошибка загрузки состояния: {e}", exc_info=True)
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить состояние:\n{e}")
 
     def import_shipment_from_google_sheets(self):
         """Импорт поставки из Google Sheets"""
@@ -2555,9 +2752,9 @@ class MainWindow(QMainWindow):
             # Статус скрыт, сообщения не отображаются
             # self.statusBar().showMessage(f"Добавлен товар {barcode} ({sku}) в количестве {qty}", 3000)
             
-            # Отложенное сохранение
-            if hasattr(self.shipment_manager, 'schedule_save'):
-                self.shipment_manager.schedule_save()
+            # Полное сохранение (новый товар нужно добавить в shipment_items)
+            if hasattr(self.shipment_manager, 'schedule_full_save'):
+                self.shipment_manager.schedule_full_save()
                 
             dialog.accept()
             
@@ -2981,30 +3178,36 @@ class MainWindow(QMainWindow):
                 #     self.current_shipment = shipment
                 #     self.exit_shipment(shipment)
 
-            elif group_shipment:  # Это группуовая поставка
-                archive_action = menu.addAction("📦 Отправить группуу в архив")
+            elif group_shipment:  # Это групповая поставка
+                archive_action = menu.addAction("📦 Отправить группу в архив")
                 archive_action.triggered.connect(lambda: self.archive_group_shipment(group_shipment.group_name))
                 menu.addSeparator()
 
-                update_group_action = menu.addAction("Обновить состав групповой поставки")
-                update_gsheets_action = menu.addAction("Обновить из Google Sheets")
-                export_all_action = menu.addAction("Экспорт всех коробок")
-                rename_group_action = menu.addAction("Переименовать группу")
-                delete_group_action = menu.addAction("Удалить группу")
+                update_excel_action = menu.addAction("📥 Обновить из Excel")
+                update_gsheets_action = menu.addAction("🔄 Обновить из Google Sheets")
+                export_all_action = menu.addAction("📤 Экспорт всех коробок")
+                menu.addSeparator()
+                save_state_action = menu.addAction("💾 Сохранить состояние коробок")
+                load_state_action = menu.addAction("📂 Загрузить состояние коробок")
+                menu.addSeparator()
+                rename_group_action = menu.addAction("✏️ Переименовать группу")
+                delete_group_action = menu.addAction("🗑️ Удалить группу")
 
                 menu.addSeparator()
-                from image_cache import get_cached_icon
-                settings_icon = get_cached_icon(config.get_resource_path(Path("Res") / "settings.png"), (16, 16))
-                properties_group_action = menu.addAction(settings_icon, "Свойства")
+                properties_group_action = menu.addAction("⚙️ Свойства")
 
                 action = self.shipments_tree_widget.mapToGlobal(position)
                 action = menu.exec(action)
-                if action == update_group_action:
+                if action == update_excel_action:
                     self.shipment_operations.update_group_shipment_composition(group_shipment)
                 elif action == update_gsheets_action:
                     self.update_group_shipment_from_google_sheets(group_shipment)
                 elif action == export_all_action:
                     self.shipment_manager.export_all_group_boxes(group_shipment)
+                elif action == save_state_action:
+                    self.save_group_shipment_state(group_shipment)
+                elif action == load_state_action:
+                    self.load_group_shipment_state(group_shipment)
                 elif action == rename_group_action:
                     self.shipment_operations.rename_group_shipment(group_shipment.group_name)
                 elif action == delete_group_action:

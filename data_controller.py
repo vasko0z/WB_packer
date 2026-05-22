@@ -219,7 +219,8 @@ class DataController:
                 box_db_id, barcode, qty = row
                 if box_db_id in box_id_to_db_id:
                     _, box = box_id_to_db_id[box_db_id]
-                    box.items[barcode] = qty
+                    normalized_bc = str(barcode).replace(" ", "").replace("-", "").replace("\t", "")
+                    box.items[normalized_bc] = qty
 
     def create_shipment_from_data(self, destination_name, font_size, label_font_size, theme,
                                   archived, archived_date, archived_by, removed_items_json,
@@ -357,10 +358,10 @@ class DataController:
             # Оптимизированная загрузка товаров в коробке
             box_items_dict = {}
             for barcode, qty in box_items:
-                # Декодируем barcode если это bytes
                 if isinstance(barcode, bytes):
                     barcode = barcode.decode('utf-8')
-                box_items_dict[barcode] = qty
+                normalized_bc = str(barcode).replace(" ", "").replace("-", "").replace("\t", "")
+                box_items_dict[normalized_bc] = qty
             box.items = box_items_dict
 
             shipment.boxes.append(box)
@@ -444,6 +445,9 @@ class DataController:
                     fetchone=True
                 )
                 shipment_id = result[0] if result else None
+
+            if shipment_id is not None:
+                shipment.shipment_id = shipment_id
 
             if shipment_id is None:
                 logger.error(f"Ошибка: shipment_id равен None для поставки {shipment.destination_name}")
@@ -603,6 +607,74 @@ class DataController:
             logger.error(f"Ошибка сохранения поставки: {e}", exc_info=True)
             return False
 
+    def save_shipment_metadata_only(self, shipment) -> bool:
+        """
+        Лёгкое сохранение только метаданных поставки (без items/boxes).
+        Используется при закрытии программы, когда items и boxes уже сохранены инкрементально.
+        """
+        try:
+            import json
+            from database import execute_query
+            from db_connection import get_db_type, get_connection
+
+            removed_items_json = json.dumps(shipment.removed_items, ensure_ascii=False)
+            parent_group = shipment.parent_group.group_name if shipment.parent_group else None
+            properties_json = json.dumps(shipment.properties.to_dict(), ensure_ascii=False)
+            archived_date = shipment.archived_date.isoformat() if shipment.archived_date else None
+
+            db_type = get_db_type()
+            use_sqlite = db_type == "sqlite"
+            placeholder = "?" if use_sqlite else "%s"
+
+            if use_sqlite:
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO shipments (
+                        destination_name, font_size, label_font_size, theme,
+                        removed_items, parent_group, properties,
+                        archived, archived_date, archived_by
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    shipment.destination_name,
+                    shipment.font_size,
+                    shipment.label_font_size,
+                    shipment.theme,
+                    removed_items_json,
+                    parent_group if parent_group else None,
+                    properties_json,
+                    1 if shipment.archived else 0,
+                    archived_date if archived_date else None,
+                    shipment.archived_by if shipment.archived_by else None
+                ))
+                conn.commit()
+            else:
+                execute_query(
+                    f"""
+                    INSERT INTO shipments (destination_name, font_size, label_font_size, theme, removed_items, parent_group, properties, archived, archived_date, archived_by)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                    ON CONFLICT (destination_name) DO UPDATE SET
+                        font_size = EXCLUDED.font_size,
+                        label_font_size = EXCLUDED.label_font_size,
+                        theme = EXCLUDED.theme,
+                        removed_items = EXCLUDED.removed_items,
+                        parent_group = EXCLUDED.parent_group,
+                        properties = EXCLUDED.properties,
+                        archived = EXCLUDED.archived,
+                        archived_date = EXCLUDED.archived_date,
+                        archived_by = EXCLUDED.archived_by
+                    """,
+                    (shipment.destination_name, shipment.font_size, shipment.label_font_size,
+                     shipment.theme, removed_items_json,
+                     parent_group if parent_group else None, properties_json,
+                     shipment.archived, archived_date if archived_date else None,
+                     shipment.archived_by if shipment.archived_by else None),
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка сохранения метаданных поставки: {e}", exc_info=True)
+            return False
+
     def save_shipment_immediate(self, shipment, box_index: int = None) -> bool:
         """
         Немедленное сохранение поставки с оптимизацией для частых вызовов.
@@ -691,6 +763,9 @@ class DataController:
                     shipment.archived_by if shipment.archived_by else None
                 ), fetchone=True)
                 shipment_id = result[0] if result else None
+
+            if shipment_id is not None:
+                shipment.shipment_id = shipment_id
 
             if shipment_id is None:
                 logger.error(f"Не удалось получить ID поставки {shipment.destination_name}")

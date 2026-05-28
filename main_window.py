@@ -1945,6 +1945,7 @@ class MainWindow(QMainWindow):
                 self.shipment_manager.save_timer.stop()
                 self.shipment_manager.save_timer = None
             self.shipment_manager.save_pending = False
+            self.shipment_manager.full_save_pending = False
 
             # Сохраняем каждую поставку с её коробками
             saved_count = 0
@@ -1980,6 +1981,7 @@ class MainWindow(QMainWindow):
                 self.shipment_manager.save_timer.stop()
                 self.shipment_manager.save_timer = None
                 self.shipment_manager.save_pending = False
+                self.shipment_manager.full_save_pending = False
 
             # Then perform the normal save
             self.save_session()
@@ -2246,12 +2248,13 @@ class MainWindow(QMainWindow):
                         })
                 
                 for barcode, item in shipment.shipment_items.items():
-                    in_boxes = sum(b.items.get(barcode, 0) for b in shipment.boxes)
+                    normalized_bc = barcode.replace(" ", "").replace("-", "").replace("\t", "")
+                    in_boxes = sum(b.items.get(normalized_bc, 0) for b in shipment.boxes)
                     if in_boxes == 0 and item.allocated_qty == 0:
                         rows.append({
                             'Поставка': display_name,
                             'Коробка': '(не распределён)',
-                            'Штрихкод': barcode,
+                            'Штрихкод': normalized_bc,
                             'Артикул': item.sku,
                             'В коробке': 0,
                             'Всего нужно': item.total_qty,
@@ -2263,6 +2266,7 @@ class MainWindow(QMainWindow):
                 return
             
             df = pd.DataFrame(rows)
+            df['Штрихкод'] = df['Штрихкод'].astype(str)
             df.to_excel(file_path, index=False)
             self.logger.info(f"Состояние групповой поставки сохранено: {file_path}")
             QMessageBox.information(self, "Готово", f"Состояние сохранено в:\n{file_path}")
@@ -2286,7 +2290,12 @@ class MainWindow(QMainWindow):
         
         try:
             import pandas as pd
-            df = pd.read_excel(file_path)
+            df = pd.read_excel(file_path, dtype={'Штрихкод': str})
+            for col in ['Поставка', 'Коробка']:
+                if col in df.columns:
+                    df[col] = df[col].astype(str).replace('nan', '').replace('None', '')
+            if 'Штрихкод' in df.columns:
+                df['Штрихкод'] = df['Штрихкод'].astype(str).replace('nan', '').replace('None', '')
             
             required_cols = ['Поставка', 'Коробка', 'Штрихкод', 'В коробке']
             missing = [c for c in required_cols if c not in df.columns]
@@ -2295,9 +2304,14 @@ class MainWindow(QMainWindow):
                 return
             
             display_to_shipment = {}
+            normalized_barcode_map = {}
             for sub_name, shipment in group_shipment.sub_shipments.items():
                 dn = shipment.display_name if hasattr(shipment, 'display_name') else sub_name
                 display_to_shipment[dn] = shipment
+                norm_map = {}
+                for bc in shipment.shipment_items:
+                    norm_map[bc.replace(" ", "").replace("-", "").replace("\t", "")] = bc
+                normalized_barcode_map[dn] = norm_map
                 shipment.boxes.clear()
                 if shipment.current_box_index >= 0:
                     shipment.current_box_index = -1
@@ -2329,9 +2343,11 @@ class MainWindow(QMainWindow):
                 if qty_in_box <= 0:
                     continue
                 
-                if barcode not in shipment.shipment_items:
+                norm_map = normalized_barcode_map.get(display_name, {})
+                if barcode not in norm_map:
                     unknown_items += 1
                     continue
+                original_barcode = norm_map[barcode]
                 
                 box = None
                 for b in shipment.boxes:
@@ -2347,7 +2363,7 @@ class MainWindow(QMainWindow):
                     restored_boxes += 1
                 
                 box.set_item_qty(barcode, qty_in_box)
-                shipment.shipment_items[barcode].allocated_qty = sum(
+                shipment.shipment_items[original_barcode].allocated_qty = sum(
                     b.items.get(barcode, 0) for b in shipment.boxes
                 )
                 restored_items += 1

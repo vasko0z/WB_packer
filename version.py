@@ -11,7 +11,7 @@ from datetime import datetime
 VERSION_MAJOR = 1
 VERSION_MINOR = 0
 VERSION_PATCH = 1
-VERSION_BUILD = 4  # Сброс на 0 для новой версии 1.0.1
+VERSION_BUILD = 11  # Исправлен race condition таймеров, loss allocated_qty при добавлении всех товаров, loss подпоставок при обновлении из Google Sheets
 
 
 def get_version_file_path():

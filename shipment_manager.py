@@ -33,6 +33,8 @@ class ShipmentManager:
         self.save_timer = None
         # Flag to track if a save is pending
         self.save_pending = False
+        # Flag: full save overrides incremental when both pending
+        self.full_save_pending = False
         # Extended delay for network operations using config value
         self.save_delay = config.NETWORK_OPERATION_DELAY  # Use delay from config for network operations
         # Local cache for shipments to minimize database queries
@@ -672,17 +674,16 @@ class ShipmentManager:
 
     def schedule_save(self):
         """Отложенное инкрементальное сохранение для уменьшения операций БД"""
-        # Переиспользуем один таймер вместо создания нового
         if self.save_timer is None:
             from PyQt6.QtCore import QTimer
             self.save_timer = QTimer()
             self.save_timer.setSingleShot(True)
-            self.save_timer.timeout.connect(self.perform_save)
+            self.save_timer.timeout.connect(self._on_save_timer_timeout)
         else:
             self.save_timer.stop()
-        
-        self.save_timer.start(self.save_delay)
+        # Не сбрасываем full_save_pending — полное сохранение приоритетнее
         self.save_pending = True
+        self.save_timer.start(self.save_delay)
 
     def schedule_full_save(self):
         """Отложенное полное сохранение (для структурных изменений)"""
@@ -690,39 +691,37 @@ class ShipmentManager:
             from PyQt6.QtCore import QTimer
             self.save_timer = QTimer()
             self.save_timer.setSingleShot(True)
-            self.save_timer.timeout.connect(self.perform_full_save)
+            self.save_timer.timeout.connect(self._on_save_timer_timeout)
         else:
             self.save_timer.stop()
-            # Переподключаем на perform_full_save
-            try:
-                self.save_timer.timeout.disconnect(self.perform_save)
-            except Exception:
-                pass
-            self.save_timer.timeout.connect(self.perform_full_save)
-        
-        self.save_timer.start(self.save_delay)
+        # Полное сохранение всегда приоритетнее инкрементального
+        self.full_save_pending = True
         self.save_pending = True
+        self.save_timer.start(self.save_delay)
+
+    def _on_save_timer_timeout(self):
+        """Единый обработчик таймера — выбирает тип сохранения по флагу"""
+        try:
+            if self.full_save_pending:
+                self.perform_full_save()
+            elif self.save_pending:
+                self.perform_save()
+        finally:
+            self.save_pending = False
+            self.full_save_pending = False
+            self.save_timer = None
 
     def perform_full_save(self):
         """Полное сохранение текущей поставки в БД"""
         if self.main_window.current_shipment:
             self.logger.debug("perform_full_save: полное сохранение поставки")
             self.main_window.data_controller.save_shipment(self.main_window.current_shipment)
-            self.save_pending = False
-            self.save_timer = None
 
     def perform_save(self):
-        """Actually perform the save operation"""
-        if self.save_pending and self.main_window.current_shipment:
-            # Минимальное логирование для производительности
+        """Инкрементальное сохранение только текущей коробки"""
+        if self.main_window.current_shipment:
             self.logger.debug(f"perform_save: сохранение коробки {self.main_window.current_shipment.boxes[self.main_window.current_shipment.current_box_index].box_id if self.main_window.current_shipment.current_box_index >= 0 else 'N/A'}")
-
-            # ОПТИМИЗАЦИЯ: Сохраняем только текущую коробку инкрементально
             self._save_current_box_incremental()
-            
-            self.save_pending = False
-            # Clear the timer reference after saving
-            self.save_timer = None
 
     def _save_current_box_incremental(self):
         """Инкрементальное сохранение только текущей коробки без полной пересохранения поставки"""
@@ -977,6 +976,21 @@ class ShipmentManager:
             shipment_item.allocated_qty += qty_to_add
             total_added += qty_to_add
             items_added += 1
+
+        # Пакетно обновляем allocated_qty в БД для всех изменённых товаров
+        if items_added > 0:
+            shipment_id = getattr(self.main_window.current_shipment, 'shipment_id', None)
+            if shipment_id:
+                from database import get_db_type
+                from db_connection import execute_query
+                db_type = get_db_type()
+                ph = "?" if db_type == "sqlite" else "%s"
+                for barcode, shipment_item in self.main_window.current_shipment.shipment_items.items():
+                    if shipment_item.allocated_qty > 0:
+                        execute_query(
+                            f"UPDATE shipment_items SET allocated_qty = {ph}, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = {ph} AND barcode = {ph}",
+                            (shipment_item.allocated_qty, shipment_id, barcode)
+                        )
 
         # Сбрасываем кэши в модели поставки при изменении распределения товаров
         self.main_window.current_shipment.invalidate_caches()

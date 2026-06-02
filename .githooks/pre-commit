@@ -1,0 +1,59 @@
+#!/bin/sh
+# pre-commit — проверки перед коммитом
+
+set -e
+
+ROOT=$(git rev-parse --show-toplevel)
+STAGED_FILES=$(git diff --cached --name-only)
+
+# Проверка 1: SESSION_LOG обновлён, если изменён код/docs
+HAS_CODE_CHANGES=false
+for f in $STAGED_FILES; do
+    case "$f" in
+        SESSION_LOG.md|docs/AUDIT_*.md|.githooks/*|VERSION|.gitattributes|.gitignore)
+            continue
+            ;;
+        *.py|*.md|docs/*)
+            HAS_CODE_CHANGES=true
+            break
+            ;;
+    esac
+done
+
+if [ "$HAS_CODE_CHANGES" = "true" ]; then
+    TODAY=$(date +%Y-%m-%d)
+    if ! grep -q "^## $TODAY" "$ROOT/SESSION_LOG.md" 2>/dev/null; then
+        echo "⚠️  SESSION_LOG.md не обновлён за сегодня ($TODAY)"
+        echo "   Запустите: python scripts/session_log.py --auto"
+        echo "   Или: git commit --no-verify (пропустить проверку)"
+        exit 1
+    fi
+fi
+
+# Проверка 2: Секреты
+PY_FILES=$(echo "$STAGED_FILES" | grep '\.py$' || true)
+if [ -n "$PY_FILES" ]; then
+    echo "$PY_FILES" | while read -r f; do
+        python "$ROOT/scripts/check_secrets.py" "$ROOT/$f" || exit 1
+    done
+fi
+
+# Проверка 3: Авто-обновление _SUMMARY.md
+HAS_NEW_DOCS=false
+for f in $STAGED_FILES; do
+    case "$f" in
+        docs/*.md)
+            if [ "$f" != "docs/_SUMMARY.md" ]; then
+                HAS_NEW_DOCS=true
+            fi
+            ;;
+    esac
+done
+
+if [ "$HAS_NEW_DOCS" = "true" ]; then
+    echo "🔄 Обновление _SUMMARY.md..."
+    python "$ROOT/scripts/gen_summary.py"
+    git add "$ROOT/docs/_SUMMARY.md"
+fi
+
+echo "✅ pre-commit checks passed"

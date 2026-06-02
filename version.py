@@ -1,30 +1,45 @@
 # -*- coding: utf-8 -*-
 """
 Модуль управления версией приложения WB_packer
-Версия вшита в код и обновляется вручную при каждой компиляции
+Версия читается из файла VERSION (единый источник версии)
+Совместимость со старым API сохранена
 """
 import json
 from pathlib import Path
 from datetime import datetime
 
-# Версия приложения - обновляется вручную при каждой компиляции!
-VERSION_MAJOR = 1
-VERSION_MINOR = 0
-VERSION_PATCH = 1
-VERSION_BUILD = 12  # Исправлено пропадание направлений (Екат, Самара, СПБ) при загрузке групповой поставки из Google Sheets
+# --- Единый источник версии: файл VERSION ---
+def _read_version_file():
+    """Читает semver из VERSION файла. Возвращает (major, minor, patch)."""
+    import sys
+    if getattr(sys, 'frozen', False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).parent
+    version_file = base / "VERSION"
+    try:
+        text = version_file.read_text(encoding='utf-8').strip()
+        parts = text.split('.')
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except Exception:
+        return 1, 0, 1
+
+_VERSION = _read_version_file()
+VERSION_MAJOR = _VERSION[0]
+VERSION_MINOR = _VERSION[1]
+VERSION_PATCH = _VERSION[2]
+
+# BUILD — остаётся в коде для совместимости; обновляется через scripts/bump_version.py
+VERSION_BUILD = 12
 
 
 def get_version_file_path():
     """Получить путь к файлу хранения версии (не используется, оставлено для совместимости)"""
     import sys
-    
     if getattr(sys, 'frozen', False):
-        # При работе из EXE - рядом с exe-файлом
         base_path = Path(sys.executable).parent
     else:
-        # При разработке - в папке проекта
         base_path = Path(__file__).parent
-    
     return base_path / "version_info.json"
 
 
@@ -33,7 +48,6 @@ def get_version_info():
     Получить информацию о версии
     Возвращает dict с ключами: major, minor, patch, build, build_date
     """
-    # Версия вшита в код
     return {
         "major": VERSION_MAJOR,
         "minor": VERSION_MINOR,
@@ -50,10 +64,10 @@ def increment_build():
     """
     global VERSION_BUILD
     VERSION_BUILD += 1
-    
+
     info = get_version_info()
     info["build_date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
+
     # Сохраняем в файл для истории (опционально)
     version_file = get_version_file_path()
     try:
@@ -62,7 +76,7 @@ def increment_build():
             json.dump(info, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
-    
+
     return info
 
 

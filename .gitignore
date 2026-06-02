@@ -70,3 +70,9 @@ doc/
 
 # Тестовые данные
 test_config.txt
+
+# История замеров (JSON)
+data/
+
+# Авто-сгенерированные файлы
+version_info.json

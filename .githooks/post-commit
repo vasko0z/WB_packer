@@ -1,0 +1,8 @@
+#!/bin/sh
+# post-commit — информация о свежести документации
+
+ROOT=$(git rev-parse --show-toplevel)
+
+if [ -f "$ROOT/scripts/docs_freshness.py" ]; then
+    python "$ROOT/scripts/docs_freshness.py" --days 30 | tail -10 || true
+fi

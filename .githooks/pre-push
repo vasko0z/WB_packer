@@ -1,0 +1,22 @@
+#!/bin/sh
+# pre-push — проверки перед push
+
+set -e
+
+ROOT=$(git rev-parse --show-toplevel)
+
+# Проверка 1: Версия синхронизирована
+VERSION=$(cat "$ROOT/VERSION" | tr -d '\n')
+if ! grep -q "**Версия:** $VERSION" "$ROOT/README.md" 2>/dev/null; then
+    echo "⚠️  Версия в README.md не синхронизирована с VERSION ($VERSION)"
+    echo "   Запустите: python scripts/bump_version.py patch"
+fi
+
+# Проверка 2: SESSION_LOG.md закоммичен
+if git diff --cached --name-only | grep -q "SESSION_LOG.md"; then
+    echo "✅ SESSION_LOG.md будет запушен"
+else
+    echo "ℹ️  SESSION_LOG.md не в staged (убедитесь, что журнал актуален)"
+fi
+
+echo "✅ pre-push checks passed"

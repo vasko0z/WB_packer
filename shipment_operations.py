@@ -319,19 +319,20 @@ class ShipmentOperations:
                     inserts.append((shipment_id, item.barcode, sku_val, item.total_qty, item.allocated_qty))
             
             if deletes:
-                execute_many(
-                    f"DELETE FROM shipment_items WHERE shipment_id = {ph} AND barcode = {ph}",
-                    deletes,
-                    template=f"({ph}, {ph})"
-                )
+                # execute_many плохо работает с DELETE/UPDATE — используем execute_query в цикле
+                for sid, barcode in deletes:
+                    execute_query(
+                        f"DELETE FROM shipment_items WHERE shipment_id = {ph} AND barcode = {ph}",
+                        (sid, barcode)
+                    )
                 logger.info(f"  Удалено из БД: {len(deletes)} товаров")
             
             if updates:
-                execute_many(
-                    f"UPDATE shipment_items SET total_qty = {ph}, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = {ph} AND barcode = {ph}",
-                    updates,
-                    template=f"({ph}, {ph}, {ph})"
-                )
+                for total_qty, sid, barcode in updates:
+                    execute_query(
+                        f"UPDATE shipment_items SET total_qty = {ph}, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = {ph} AND barcode = {ph}",
+                        (total_qty, sid, barcode)
+                    )
                 logger.info(f"  Обновлено в БД: {len(updates)} товаров")
             
             if inserts:

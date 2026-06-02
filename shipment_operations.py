@@ -161,12 +161,22 @@ class ShipmentOperations:
         skip_cols = 2
         if len(df.columns) > 3:
             third_col = df.columns[2]
-            sample_val = df[third_col].dropna().iloc[0] if len(df[third_col].dropna()) > 0 else None
-            if sample_val is not None:
+            # Проверяем, есть ли хотя бы одно числовое (непустое) значение в третьей колонке
+            has_numeric = False
+            for val in df[third_col]:
+                if pd.isna(val):
+                    continue
+                val_str = str(val).strip()
+                if val_str == '' or val_str.lower() in ['nan', 'none']:
+                    continue
                 try:
-                    float(str(sample_val).replace(',', '.').strip())
+                    float(val_str.replace(',', '.'))
+                    has_numeric = True
+                    break
                 except (ValueError, TypeError):
-                    skip_cols = 3
+                    continue
+            if not has_numeric:
+                skip_cols = 3
         
         quantity_cols = list(df.columns[skip_cols:])
         
@@ -551,17 +561,26 @@ class ShipmentOperations:
             # Пропускаем первые 2 колонки (штрихкод, артикул)
             # Все остальные колонки - это города с количествами
             for col in df.columns[2:]:
-                # Проверяем данные внутри колонки, а не заголовок
-                sample_vals = df[col].dropna()
-                if len(sample_vals) > 0:
-                    # Берём первое непустое значение
-                    sample_val = sample_vals.iloc[0]
+                col_name = str(col).strip()
+                # Пропускаем пустые и служебные колонки
+                if not col_name or col_name.startswith('Unnamed'):
+                    continue
+                # Проверяем, есть ли хотя бы одно числовое (непустое) значение в колонке
+                has_numeric = False
+                for val in df[col]:
+                    if pd.isna(val):
+                        continue
+                    val_str = str(val).strip()
+                    if val_str == '' or val_str.lower() in ['nan', 'none']:
+                        continue
                     try:
-                        float(str(sample_val).replace(',', '.').strip())
-                        quantity_cols.append(col)
+                        float(val_str.replace(',', '.'))
+                        has_numeric = True
+                        break
                     except (ValueError, TypeError):
-                        # Колонка не содержит числовых данных - пропускаем
-                        pass
+                        continue
+                if has_numeric:
+                    quantity_cols.append(col)
         
         if not quantity_cols:
             from PyQt6.QtWidgets import QMessageBox

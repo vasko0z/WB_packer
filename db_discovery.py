@@ -37,7 +37,7 @@ class PostgreSQLDiscovery:
     DEFAULT_DATABASE = "wb_packer"
     DEFAULT_USER = "wb_packer_user"
     # Пароль загружается из переменной окружения или используется значение по умолчанию
-    DEFAULT_PASSWORD = os.environ.get("WB_PACKER_DB_PASSWORD", "DWV8ns27")
+    DEFAULT_PASSWORD = os.environ.get("WB_PACKER_DB_PASSWORD", "f391b64ab56e88c10aca3525d945cee9")
     TIMEOUT = 0.3  # Еще более уменьшенный таймаут подключения в секундах
     CONFIG_FILE = Path(__file__).parent / "db_config.json"
     

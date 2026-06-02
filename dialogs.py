@@ -1356,14 +1356,20 @@ class GoogleSheetsImportDialog(QDialog):
         
         # Галочка "Групповая поставка"
         self.group_checkbox = QCheckBox("Групповая поставка (несколько городов/складов)")
-        self.group_checkbox.setChecked(False)
+        self.group_checkbox.setChecked(True)
         layout.addWidget(self.group_checkbox)
         
         # Подсказка
         hint_label = QLabel("✓ Обычная поставка: одна колонка с количеством\n✓ Групповая: несколько колонок (по городам/складам)")
         hint_label.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint_label)
-        
+
+        # Ссылка на таблицу
+        link_label = QLabel('<a href="https://docs.google.com/spreadsheets/d/1OGgsS0T4qaEekJgEkVTplZfoeQ7MeMth8o8eJTqnJGA/edit?gid=0#gid=0">Открыть таблицу поставок</a>')
+        link_label.setOpenExternalLinks(True)
+        link_label.setStyleSheet("color: #1a73e8; font-size: 11px;")
+        layout.addWidget(link_label)
+
         # Кнопки
         buttons = QHBoxLayout()
         ok_btn = QPushButton("OK")

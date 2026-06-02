@@ -2521,13 +2521,21 @@ class MainWindow(QMainWindow):
             if not is_group and len(significant_columns) > 3:
                 numeric_cols = 0
                 for col in significant_columns[2:]:
-                    sample_val = df[col].dropna().iloc[0] if len(df[col].dropna()) > 0 else None
-                    if sample_val is not None:
+                    has_numeric = False
+                    for val in df[col]:
+                        if pd.isna(val):
+                            continue
+                        val_str = str(val).strip()
+                        if val_str == '' or val_str.lower() in ['nan', 'none']:
+                            continue
                         try:
-                            float(str(sample_val).replace(',', '.').strip())
-                            numeric_cols += 1
+                            float(val_str.replace(',', '.'))
+                            has_numeric = True
+                            break
                         except (ValueError, TypeError):
-                            pass
+                            continue
+                    if has_numeric:
+                        numeric_cols += 1
                 if numeric_cols > 1:
                     is_group = True
                     self.logger.info(f"Обнаружена групповая поставка: {numeric_cols} колонок с числами")

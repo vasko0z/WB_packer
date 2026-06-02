@@ -11,7 +11,7 @@ from datetime import datetime
 VERSION_MAJOR = 1
 VERSION_MINOR = 0
 VERSION_PATCH = 1
-VERSION_BUILD = 11  # Исправлен race condition таймеров, loss allocated_qty при добавлении всех товаров, loss подпоставок при обновлении из Google Sheets
+VERSION_BUILD = 12  # Исправлено пропадание направлений (Екат, Самара, СПБ) при загрузке групповой поставки из Google Sheets
 
 
 def get_version_file_path():

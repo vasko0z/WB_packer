@@ -271,8 +271,10 @@ class Shipment:
         return result
         
     def add_shipment_item(self, barcode: str, sku: str, total_qty: int) -> None:
-        item = ShipmentItem(barcode, sku, total_qty)
-        self.shipment_items[barcode] = item
+        if barcode in self.shipment_items:
+            self.shipment_items[barcode].total_qty += total_qty
+        else:
+            self.shipment_items[barcode] = ShipmentItem(barcode, sku, total_qty)
         self.invalidate_caches()
 
     def remove_shipment_item(self, barcode: str) -> None:

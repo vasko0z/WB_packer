@@ -201,135 +201,55 @@ class ShipmentManager:
                             self.logger.error(f"Все поставки в БД: {[(int(r[0]), r[1]) for r in all_shipments]}")
                             return
 
+                    # Сохраняем shipment_id в объект для будущих операций
+                    shipment.shipment_id = shipment_id
+                    self.logger.debug(f"shipment_id={shipment_id} сохранён в поставку {shipment.destination_name}")
+
                     # Обновляем сессию пользователя для текущей поставки
                     if hasattr(self.main_window, 'current_user') and self.main_window.current_user:
                         from database import update_user_session
                         update_user_session(shipment.destination_name, self.main_window.current_user)
 
-                    # Используем batch-операции для улучшения производительности
-                    queries_with_params = []
-
-                    # Удаляем существующие элементы поставки
-                    if use_sqlite:
-                        queries_with_params.append((
-                            "DELETE FROM shipment_items WHERE shipment_id = ?",
-                            (shipment_id,)
-                        ))
-                    else:
-                        queries_with_params.append((
-                            "DELETE FROM shipment_items WHERE shipment_id = %s",
-                            (shipment_id,)
-                        ))
-
-                    # Оптимизация: batch-вставка элементов поставки через execute_many
+                    # Подготавливаем данные
                     shipment_items_data = []
                     for item in shipment.shipment_items.values():
                         barcode_val = item.barcode.encode('utf-8').decode('utf-8') if isinstance(item.barcode, str) else item.barcode
                         sku_val = item.sku.encode('utf-8').decode('utf-8') if isinstance(item.sku, str) else item.sku
                         shipment_items_data.append((shipment_id, barcode_val, sku_val, item.total_qty, item.allocated_qty))
 
-                    # Удаляем существующие коробки
-                    if use_sqlite:
-                        queries_with_params.append((
-                            "DELETE FROM boxes WHERE shipment_id = ?",
-                            (shipment_id,)
-                        ))
-                    else:
-                        queries_with_params.append((
-                            "DELETE FROM boxes WHERE shipment_id = %s",
-                            (shipment_id,)
-                        ))
-
-                    # Подготавливаем вставку для коробок
+                    boxes_data = []
                     for i, box in enumerate(shipment.boxes):
                         is_current = True if i == shipment.current_box_index else False
-                        if use_sqlite:
-                            queries_with_params.append((
-                                """
-                                INSERT OR REPLACE INTO boxes (shipment_id, box_id, is_current)
-                                VALUES (?, ?, ?)
-                                """,
-                                (shipment_id, box.box_id.encode('utf-8').decode('utf-8') if isinstance(box.box_id, str) else box.box_id, is_current)
-                            ))
-                        else:
-                            # Для PostgreSQL используем ON CONFLICT с RETURNING для получения ID
-                            queries_with_params.append((
-                                """
-                                INSERT INTO boxes (shipment_id, box_id, is_current)
-                                VALUES (%s, %s, %s)
-                                ON CONFLICT (shipment_id, box_id) DO UPDATE SET is_current = EXCLUDED.is_current
-                                RETURNING id
-                                """,
-                                (shipment_id, box.box_id.encode('utf-8').decode('utf-8') if isinstance(box.box_id, str) else box.box_id, is_current)
-                            ))
+                        boxes_data.append((
+                            shipment_id, 
+                            box.box_id.encode('utf-8').decode('utf-8') if isinstance(box.box_id, str) else box.box_id, 
+                            is_current
+                        ))
 
-                    # Выполняем все подготовленные запросы в одной транзакции
-                    # Для PostgreSQL сначала вставляем коробки и собираем их ID
-                    if not use_sqlite:
-                        # Оптимизация: batch INSERT shipment_items через execute_many
-                        if shipment_items_data:
-                            from db_connection import execute_many
-                            execute_many(
-                                "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES %s ON CONFLICT (shipment_id, barcode) DO UPDATE SET sku = EXCLUDED.sku",
-                                shipment_items_data,
-                                template="(%s, %s, %s, %s, %s)"
-                            )
-
-                        # Вставляем коробки
-                        for query, params in queries_with_params:
-                            if 'RETURNING id' not in query:
-                                cursor.execute(query, params)
-
-                        # Получаем актуальные ID коробок из БД (надёжнее чем RETURNING id)
-                        cursor.execute(
-                            "SELECT id, box_id FROM boxes WHERE shipment_id = %s",
-                            (shipment_id,)
-                        )
-                        box_id_map = {row[1]: row[0] for row in cursor.fetchall()}
-
-                        # Теперь используем box_id_map для вставки box_items
-                        for i, box in enumerate(shipment.boxes):
-                            box_db_id = box_id_map.get(box.box_id.encode('utf-8').decode('utf-8') if isinstance(box.box_id, str) else box.box_id)
-
-                            if box_db_id:
-                                # Удаляем существующие элементы коробок (если нужно)
-                                if not preserve_box_items:
-                                    cursor.execute(
-                                        "DELETE FROM box_items WHERE box_id = %s",
-                                        (box_db_id,)
-                                    )
-
-                    # Оптимизация: batch INSERT box_items через execute_many
-                    box_items_data = []
-                    for i, box in enumerate(shipment.boxes):
-                        box_db_id = box_id_map.get(box.box_id.encode('utf-8').decode('utf-8') if isinstance(box.box_id, str) else box.box_id)
-                        if box_db_id:
-                            for barcode, qty in box.items.items():
-                                barcode_val = barcode.encode('utf-8').decode('utf-8') if isinstance(barcode, str) else barcode
-                                box_items_data.append((box_db_id, barcode_val, qty))
-
-                    if box_items_data:
-                        from db_connection import execute_many
-                        execute_many(
-                            "INSERT INTO box_items (box_id, barcode, qty) VALUES %s ON CONFLICT (box_id, barcode) DO UPDATE SET qty = EXCLUDED.qty",
-                            box_items_data,
-                            template="(%s, %s, %s)"
-                        )
-
-                    # SQLite path: выполняем все запросы и вставляем shipment_items/box_items
                     if use_sqlite:
-                        # batch INSERT shipment_items через executemany
+                        # SQLite: UPSERT shipment_items
                         if shipment_items_data:
                             cursor.executemany(
-                                "INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) VALUES (?, ?, ?, ?, ?)",
+                                """INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) 
+                                VALUES (?, ?, ?, ?, ?) 
+                                ON CONFLICT(shipment_id, barcode) DO UPDATE SET 
+                                    sku = excluded.sku,
+                                    total_qty = excluded.total_qty,
+                                    allocated_qty = excluded.allocated_qty""",
                                 shipment_items_data
                             )
-
-                        # Для SQLite выполняем все запросы как обычно
-                        for query, params in queries_with_params:
-                            cursor.execute(query, params)
                         
-                        # Получаем ID коробок и вставляем box_items
+                        # SQLite: UPSERT boxes
+                        if boxes_data:
+                            cursor.executemany(
+                                """INSERT INTO boxes (shipment_id, box_id, is_current) 
+                                VALUES (?, ?, ?) 
+                                ON CONFLICT(shipment_id, box_id) DO UPDATE SET 
+                                    is_current = excluded.is_current""",
+                                boxes_data
+                            )
+                        
+                        # Получаем ID коробок
                         box_ids = [box.box_id for box in shipment.boxes]
                         if box_ids:
                             placeholders = ','.join(['?'] * len(box_ids))
@@ -341,29 +261,76 @@ class ShipmentManager:
                         else:
                             box_id_map = {}
 
-                        # Оптимизация: batch INSERT box_items через executemany
+                        # SQLite: UPSERT box_items
                         sqlite_box_items_data = []
                         for i, box in enumerate(shipment.boxes):
                             box_db_id = box_id_map.get(box.box_id)
                             if box_db_id:
-                                # Удаляем существующие элементы коробок (если нужно)
-                                if not preserve_box_items:
-                                    cursor.execute(
-                                        "DELETE FROM box_items WHERE box_id = ?",
-                                        (box_db_id,)
-                                    )
                                 for barcode, qty in box.items.items():
                                     barcode_val = barcode.encode('utf-8').decode('utf-8') if isinstance(barcode, str) else barcode
                                     sqlite_box_items_data.append((box_db_id, barcode_val, qty))
 
                         if sqlite_box_items_data:
                             cursor.executemany(
-                                "INSERT OR REPLACE INTO box_items (box_id, barcode, qty) VALUES (?, ?, ?)",
+                                """INSERT INTO box_items (box_id, barcode, qty) 
+                                VALUES (?, ?, ?) 
+                                ON CONFLICT(box_id, barcode) DO UPDATE SET 
+                                    qty = excluded.qty""",
                                 sqlite_box_items_data
+                            )
+                    else:
+                        # PostgreSQL: batch UPSERT shipment_items
+                        if shipment_items_data:
+                            from db_connection import execute_many
+                            execute_many(
+                                """INSERT INTO shipment_items (shipment_id, barcode, sku, total_qty, allocated_qty) 
+                                VALUES %s 
+                                ON CONFLICT (shipment_id, barcode) DO UPDATE SET 
+                                    sku = EXCLUDED.sku,
+                                    total_qty = EXCLUDED.total_qty,
+                                    allocated_qty = EXCLUDED.allocated_qty""",
+                                shipment_items_data,
+                                template="(%s, %s, %s, %s, %s)"
+                            )
+                        
+                        # PostgreSQL: batch UPSERT boxes
+                        if boxes_data:
+                            execute_many(
+                                """INSERT INTO boxes (shipment_id, box_id, is_current) 
+                                VALUES %s 
+                                ON CONFLICT (shipment_id, box_id) DO UPDATE SET 
+                                    is_current = EXCLUDED.is_current""",
+                                boxes_data,
+                                template="(%s, %s, %s)"
+                            )
+                        
+                        # Получаем ID коробок
+                        cursor.execute(
+                            "SELECT id, box_id FROM boxes WHERE shipment_id = %s",
+                            (shipment_id,)
+                        )
+                        box_id_map = {row[1]: row[0] for row in cursor.fetchall()}
+
+                        # PostgreSQL: batch UPSERT box_items
+                        box_items_data = []
+                        for i, box in enumerate(shipment.boxes):
+                            box_db_id = box_id_map.get(box.box_id.encode('utf-8').decode('utf-8') if isinstance(box.box_id, str) else box.box_id)
+                            if box_db_id:
+                                for barcode, qty in box.items.items():
+                                    barcode_val = barcode.encode('utf-8').decode('utf-8') if isinstance(barcode, str) else barcode
+                                    box_items_data.append((box_db_id, barcode_val, qty))
+
+                        if box_items_data:
+                            execute_many(
+                                """INSERT INTO box_items (box_id, barcode, qty) 
+                                VALUES %s 
+                                ON CONFLICT (box_id, barcode) DO UPDATE SET 
+                                    qty = EXCLUDED.qty""",
+                                box_items_data,
+                                template="(%s, %s, %s)"
                             )
 
                     # Обновляем сессию пользователя для отслеживания активности в этой поставке
-                    # Вызываем ПОСЛЕ коммита основной транзакции
                     conn.commit()
                     
                     if hasattr(self.main_window, 'current_user') and self.main_window.current_user:

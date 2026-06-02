@@ -117,7 +117,19 @@ class DataController:
                 for sub in group.sub_shipments.values():
                     sub.invalidate_caches()
 
-            logger.info(f"Загрузка завершена: {len(shipments)} обычных поставок, {len(group_shipments)} групповых поставок")
+            # Логируем загруженные товары для отладки
+            total_loaded_items = 0
+            for shipment in shipments.values():
+                items_count = len(shipment.shipment_items)
+                total_loaded_items += items_count
+                logger.info(f"load_shipments: Обычная поставка '{shipment.destination_name}' — загружено {items_count} товаров")
+            for group in group_shipments.values():
+                for shipment in group.sub_shipments.values():
+                    items_count = len(shipment.shipment_items)
+                    total_loaded_items += items_count
+                    logger.info(f"load_shipments: Подпоставка '{shipment.destination_name}' (группа '{group.group_name}') — загружено {items_count} товаров")
+            
+            logger.info(f"Загрузка завершена: {len(shipments)} обычных поставок, {len(group_shipments)} групповых поставок, ВСЕГО {total_loaded_items} товаров")
 
             return {
                 'shipments': shipments,
@@ -628,6 +640,10 @@ class DataController:
             import json
             from database import execute_query
             from db_connection import get_db_type, get_connection
+
+            shipment_id = getattr(shipment, 'shipment_id', 'None')
+            items_count = len(shipment.shipment_items)
+            logger.info(f"save_shipment_metadata_only: '{shipment.destination_name}' id={shipment_id}, items={items_count}")
 
             removed_items_json = json.dumps(shipment.removed_items, ensure_ascii=False)
             parent_group = shipment.parent_group.group_name if shipment.parent_group else None

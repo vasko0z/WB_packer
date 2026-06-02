@@ -1424,7 +1424,6 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         try:
-            self.logger.info("=== closeEvent: НАЧАЛО ЗАКРЫТИЯ ===")
             if hasattr(self, 'save_timer') and self.save_timer:
                 self.save_timer.stop()
             # Принудительно сохраняем ширину столбцов перед сохранением настроек
@@ -1432,7 +1431,6 @@ class MainWindow(QMainWindow):
             self.save_window_state()
             # Сохраняем ВСЕ поставки, а не только текущую (пользователь мог редактировать несколько)
             self.save_all_shipments()
-            self.logger.info("=== closeEvent: СОХРАНЕНИЕ ЗАВЕРШЕНО ===")
             # Сохраняем настройки пользователя
             self.save_user_settings()
             self.logger.info(f"Настройки пользователя {self.current_user} сохранены при закрытии")
@@ -1952,11 +1950,7 @@ class MainWindow(QMainWindow):
 
             # Сохраняем каждую поставку с её коробками
             saved_count = 0
-            total_items_before = 0
             for shipment in self.shipments.values():
-                items_count = len(shipment.shipment_items)
-                total_items_before += items_count
-                self.logger.info(f"save_all_shipments: Обычная поставка '{shipment.destination_name}' — {items_count} товаров")
                 try:
                     self.data_controller.save_shipment_metadata_only(shipment)
                     saved_count += 1
@@ -1966,16 +1960,13 @@ class MainWindow(QMainWindow):
             # Сохраняем подпоставки из групповых поставок
             for group in self.group_shipments.values():
                 for shipment in group.sub_shipments.values():
-                    items_count = len(shipment.shipment_items)
-                    total_items_before += items_count
-                    self.logger.info(f"save_all_shipments: Подпоставка '{shipment.destination_name}' (группа '{group.group_name}') — {items_count} товаров")
                     try:
                         self.data_controller.save_shipment_metadata_only(shipment)
                         saved_count += 1
                     except Exception as e:
                         self.logger.warning(f"Не удалось сохранить подпоставку {shipment.destination_name}: {e}")
             
-            self.logger.info(f"save_all_shipments: ВСЕГО сохранено {saved_count} поставок, {total_items_before} товаров в памяти")
+            self.logger.info(f"Сохранено {saved_count} поставок при закрытии программы")
         except Exception as e:
             self.logger.error(f"Ошибка при сохранении всех поставок: {e}", exc_info=True)
 

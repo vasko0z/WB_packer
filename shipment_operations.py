@@ -236,6 +236,7 @@ class ShipmentOperations:
         
         if imported_count > 0:
             self.main_window.group_shipments[group_shipment.group_name] = group_shipment
+            group_shipment.invalidate_caches()
             self.main_window.ui_updater.update_ui()
             self.main_window.show_status(f"Групповая поставка '{sheet_name}' обновлена ({imported_count} колонок)", 3000)
         else:
@@ -272,15 +273,26 @@ class ShipmentOperations:
             old_barcodes = set(existing_barcodes.keys())
             
             # Обновляем shipment_items в памяти
-            # Товары, которых нет в new_items — НЕ удаляем, просто не обновляем qty
-            # (они остаются в БД как есть, пользователь может удалить вручную)
+            logger.info(f"_update_existing_shipment_items: {shipment.destination_name} — new_items={len(new_items)}, existing={len(existing_barcodes)}")
+            
+            # Удаляем товары, которых больше нет в new_items
+            barcodes_to_remove = old_barcodes - new_barcodes
+            if barcodes_to_remove:
+                logger.info(f"  Удаляем товары: {barcodes_to_remove}")
+                for barcode in barcodes_to_remove:
+                    if barcode in shipment.shipment_items:
+                        del shipment.shipment_items[barcode]
+            
             for barcode, (sku, qty) in new_items.items():
                 if barcode in shipment.shipment_items:
+                    old_qty = shipment.shipment_items[barcode].total_qty
                     shipment.shipment_items[barcode].total_qty = qty
                     if sku:
                         shipment.shipment_items[barcode].sku = sku
+                    logger.info(f"  Обновляем {barcode}: {old_qty} → {qty}")
                 else:
                     shipment.add_shipment_item(barcode, sku, qty)
+                    logger.info(f"  Добавляем {barcode}: qty={qty}")
             
             shipment.invalidate_caches()
             
@@ -288,9 +300,16 @@ class ShipmentOperations:
             for item in shipment.shipment_items.values():
                 item.allocated_qty = sum(b.items.get(item.barcode, 0) for b in shipment.boxes)
             
-            # Обновляем БД: обновить существующие, вставить новые
+            # Обновляем БД: удалить устаревшие, обновить существующие, вставить новые
+            deletes = []
             updates = []
             inserts = []
+            
+            # Удаляем товары, которых нет в new_items
+            for barcode in barcodes_to_remove:
+                if barcode in existing_barcodes:
+                    deletes.append((shipment_id, barcode))
+            
             for item in shipment.shipment_items.values():
                 if item.barcode in existing_barcodes:
                     if item.total_qty != existing_barcodes[item.barcode]:
@@ -299,12 +318,21 @@ class ShipmentOperations:
                     sku_val = item.sku.encode('utf-8').decode('utf-8') if isinstance(item.sku, str) else item.sku
                     inserts.append((shipment_id, item.barcode, sku_val, item.total_qty, item.allocated_qty))
             
+            if deletes:
+                execute_many(
+                    f"DELETE FROM shipment_items WHERE shipment_id = {ph} AND barcode = {ph}",
+                    deletes,
+                    template=f"({ph}, {ph})"
+                )
+                logger.info(f"  Удалено из БД: {len(deletes)} товаров")
+            
             if updates:
                 execute_many(
                     f"UPDATE shipment_items SET total_qty = {ph}, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE shipment_id = {ph} AND barcode = {ph}",
                     updates,
                     template=f"({ph}, {ph}, {ph})"
                 )
+                logger.info(f"  Обновлено в БД: {len(updates)} товаров")
             
             if inserts:
                 execute_many(
@@ -312,6 +340,7 @@ class ShipmentOperations:
                     inserts,
                     template=f"({ph}, {ph}, {ph}, {ph}, {ph})"
                 )
+                logger.info(f"  Вставлено в БД: {len(inserts)} товаров")
             
             # Обновляем allocated_qty в БД для товаров, которые уже были
             for item in shipment.shipment_items.values():
@@ -322,7 +351,7 @@ class ShipmentOperations:
                     )
             
             logger.info(f"Обновлена подпоставка {shipment.destination_name}: "
-                       f"обновлено {len(updates)}, добавлено {len(inserts)}, "
+                       f"удалено {len(deletes)}, обновлено {len(updates)}, добавлено {len(inserts)}, "
                        f"товаров в файле: {len(new_barcodes)}, в БД: {len(existing_barcodes)}")
         
         except Exception as e:

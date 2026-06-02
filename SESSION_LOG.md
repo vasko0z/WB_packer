@@ -1,5 +1,25 @@
 # Журнал сессий — WB Packer
 
+## 2026-06-02 (сессия 3)
+
+### Исправление: нулевая сумма после перезахода при загрузке групповой поставки из Google Sheets
+
+> [!fix] КРИТИЧЕСКИЙ БАГ — Потеря shipment_items при закрытии программы
+
+**Причина:** В `save_shipment_metadata_only()`, `save_shipment()`, `save_shipment_immediate()` (data_controller.py) и `_save_current_box_incremental()` (shipment_manager.py) для SQLite использовался `INSERT OR REPLACE INTO shipments`. В SQLite `INSERT OR REPLACE` работает как `DELETE` + `INSERT`: удаляет старую запись (включая `ON DELETE CASCADE` для `shipment_items`, `boxes`, `box_items`) и вставляет новую с новым `id`. При закрытии программы `save_all_shipments()` вызывает `save_shipment_metadata_only()` для всех поставок, что приводит к каскадному удалению всех `shipment_items` без их восстановления. После перезапуска `load_shipments()` загружает поставки, но `shipment_items` пустые — отсюда "0/0".
+
+**Что сделано:**
+1. Во всех 4 местах `INSERT OR REPLACE INTO shipments` заменён на `INSERT INTO shipments ... ON CONFLICT(destination_name) DO UPDATE SET ...` (UPSERT без CASCADE DELETE)
+2. В `shipment_manager.save_shipment()` добавлено сохранение `shipment_id` в объект поставки после получения ID из БД
+
+**Файлы:**
+- `data_controller.py` — `save_shipment()`, `save_shipment_metadata_only()`, `save_shipment_immediate()`
+- `shipment_manager.py` — `save_shipment()`, `_save_current_box_incremental()`
+
+**Команды:** `pyinstaller WB_Packer.spec --clean`
+
+---
+
 ## 2026-06-02 (сессия 2)
 
 ### Внедрение системы документации PROJECT_SYSTEM.md

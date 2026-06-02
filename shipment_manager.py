@@ -70,16 +70,27 @@ class ShipmentManager:
                     on_conflict = "INSERT OR REPLACE INTO" if use_sqlite else """INSERT INTO shipments (...) VALUES (...) ON CONFLICT (destination_name) DO UPDATE SET"""
 
                     if use_sqlite:
-                        # Для SQLite используем INSERT OR REPLACE
+                        # INSERT OR REPLACE приводит к DELETE + INSERT, что вызывает CASCADE удаление shipment_items
+                        # Используем INSERT ... ON CONFLICT DO UPDATE для сохранения связанных записей
                         dest_name = shipment.destination_name.encode('utf-8').decode('utf-8')
-                        self.logger.debug(f"INSERT OR REPLACE: dest_name={dest_name}, archived={1 if shipment.archived else 0}")
+                        self.logger.debug(f"UPSERT shipments: dest_name={dest_name}, archived={1 if shipment.archived else 0}")
                         
                         cursor.execute(f"""
-                            INSERT OR REPLACE INTO shipments (
+                            INSERT INTO shipments (
                                 destination_name, font_size, label_font_size, theme,
                                 removed_items, parent_group, properties,
                                 archived, archived_date, archived_by
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(destination_name) DO UPDATE SET
+                                font_size = excluded.font_size,
+                                label_font_size = excluded.label_font_size,
+                                theme = excluded.theme,
+                                removed_items = excluded.removed_items,
+                                parent_group = excluded.parent_group,
+                                properties = excluded.properties,
+                                archived = excluded.archived,
+                                archived_date = excluded.archived_date,
+                                archived_by = excluded.archived_by
                         """, (
                             dest_name,
                             shipment.font_size,
@@ -93,7 +104,7 @@ class ShipmentManager:
                             shipment.archived_by.encode('utf-8').decode('utf-8') if shipment.archived_by else None
                         ))
                         
-                        self.logger.debug(f"INSERT выполнен, lastrowid={cursor.lastrowid}")
+                        self.logger.debug(f"UPSERT выполнен, lastrowid={cursor.lastrowid}")
 
                         # Получаем ID поставки - сначала проверяем, есть ли shipment.shipment_id
                         if hasattr(shipment, 'shipment_id') and shipment.shipment_id:
@@ -120,13 +131,16 @@ class ShipmentManager:
                                 shipment_id = result[0] if result else None
 
                             if shipment_id is None:
-                                self.logger.error(f"Не удалось получить ID поставки {shipment.destination_name} после INSERT OR REPLACE")
+                                self.logger.error(f"Не удалось получить ID поставки {shipment.destination_name} после UPSERT")
                                 self.logger.error(f"Попытка поиска: {dest_name}")
                                 # Проверяем, что вообще есть в таблице
                                 cursor.execute("SELECT id, destination_name FROM shipments")
                                 all_shipments = cursor.fetchall()
                                 self.logger.error(f"Все поставки в БД: {all_shipments}")
                                 return
+                            
+                            # Сохраняем shipment_id в объект поставки для будущих сохранений
+                            shipment.shipment_id = shipment_id
                     else:
                         # Для PostgreSQL используем ON CONFLICT
                         cursor.execute("""
@@ -753,12 +767,24 @@ class ShipmentManager:
             archived_date = shipment.archived_date.isoformat() if shipment.archived_date else None
             
             if use_sqlite:
+                # INSERT OR REPLACE приводит к DELETE + INSERT, что вызывает CASCADE удаление shipment_items
+                # Используем INSERT ... ON CONFLICT DO UPDATE для сохранения связанных записей
                 queries.append((
-                    """INSERT OR REPLACE INTO shipments (
+                    """INSERT INTO shipments (
                         destination_name, font_size, label_font_size, theme,
                         removed_items, parent_group, properties,
                         archived, archived_date, archived_by
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(destination_name) DO UPDATE SET
+                        font_size = excluded.font_size,
+                        label_font_size = excluded.label_font_size,
+                        theme = excluded.theme,
+                        removed_items = excluded.removed_items,
+                        parent_group = excluded.parent_group,
+                        properties = excluded.properties,
+                        archived = excluded.archived,
+                        archived_date = excluded.archived_date,
+                        archived_by = excluded.archived_by""",
                     (shipment.destination_name, shipment.font_size, shipment.label_font_size,
                      shipment.theme, removed_items_json,
                      shipment.parent_group.group_name if shipment.parent_group else None,

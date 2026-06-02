@@ -30,7 +30,7 @@ VERSION_MINOR = _VERSION[1]
 VERSION_PATCH = _VERSION[2]
 
 # BUILD — остаётся в коде для совместимости; обновляется через scripts/bump_version.py
-VERSION_BUILD = 12
+VERSION_BUILD = 13  # Исправлено CASCADE удаление shipment_items при закрытии (INSERT OR REPLACE → UPSERT)
 
 
 def get_version_file_path():

@@ -395,12 +395,24 @@ class DataController:
             if use_sqlite:
                 conn = get_connection()
                 cursor = conn.cursor()
+                # INSERT OR REPLACE приводит к DELETE + INSERT, что вызывает CASCADE удаление shipment_items
+                # Используем INSERT ... ON CONFLICT DO UPDATE для сохранения связанных записей
                 cursor.execute("""
-                    INSERT OR REPLACE INTO shipments (
+                    INSERT INTO shipments (
                         destination_name, font_size, label_font_size, theme,
                         removed_items, parent_group, properties,
                         archived, archived_date, archived_by
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(destination_name) DO UPDATE SET
+                        font_size = excluded.font_size,
+                        label_font_size = excluded.label_font_size,
+                        theme = excluded.theme,
+                        removed_items = excluded.removed_items,
+                        parent_group = excluded.parent_group,
+                        properties = excluded.properties,
+                        archived = excluded.archived,
+                        archived_date = excluded.archived_date,
+                        archived_by = excluded.archived_by
                 """, (
                     shipment.destination_name,
                     shipment.font_size,
@@ -629,12 +641,24 @@ class DataController:
             if use_sqlite:
                 conn = get_connection()
                 cursor = conn.cursor()
+                # INSERT OR REPLACE приводит к DELETE + INSERT, что вызывает CASCADE удаление shipment_items
+                # Используем INSERT ... ON CONFLICT DO UPDATE для сохранения связанных записей
                 cursor.execute("""
-                    INSERT OR REPLACE INTO shipments (
+                    INSERT INTO shipments (
                         destination_name, font_size, label_font_size, theme,
                         removed_items, parent_group, properties,
                         archived, archived_date, archived_by
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(destination_name) DO UPDATE SET
+                        font_size = excluded.font_size,
+                        label_font_size = excluded.label_font_size,
+                        theme = excluded.theme,
+                        removed_items = excluded.removed_items,
+                        parent_group = excluded.parent_group,
+                        properties = excluded.properties,
+                        archived = excluded.archived,
+                        archived_date = excluded.archived_date,
+                        archived_by = excluded.archived_by
                 """, (
                     shipment.destination_name,
                     shipment.font_size,
@@ -714,12 +738,24 @@ class DataController:
             archived_date = shipment.archived_date.isoformat() if shipment.archived_date else None
 
             if use_sqlite:
+                # INSERT OR REPLACE приводит к DELETE + INSERT, что вызывает CASCADE удаление shipment_items
+                # Используем INSERT ... ON CONFLICT DO UPDATE для сохранения связанных записей
                 execute_query("""
-                    INSERT OR REPLACE INTO shipments (
+                    INSERT INTO shipments (
                         destination_name, font_size, label_font_size, theme,
                         removed_items, parent_group, properties,
                         archived, archived_date, archived_by
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(destination_name) DO UPDATE SET
+                        font_size = excluded.font_size,
+                        label_font_size = excluded.label_font_size,
+                        theme = excluded.theme,
+                        removed_items = excluded.removed_items,
+                        parent_group = excluded.parent_group,
+                        properties = excluded.properties,
+                        archived = excluded.archived,
+                        archived_date = excluded.archived_date,
+                        archived_by = excluded.archived_by
                 """, (
                     shipment.destination_name,
                     shipment.font_size,

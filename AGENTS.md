@@ -3,15 +3,18 @@
 **Версия:** 1.0 | **Дата:** 2026-06-02
 
 ## Общие правила
+
 - Язык рассуждений: русский
 - Кодировка: UTF-8 (без BOM)
 - Shell: PowerShell 5.1 (Windows), избегать `>` / `>>` для русского текста
 
 ## Деплой
+
 - Компиляция: `pyinstaller WB_Packer.spec --clean`
 - Зависимости: PyQt6, pandas, reportlab, openpyxl, psycopg2, Pillow, gspread, google-auth
 
 ## Git
+
 - Репозиторий: https://github.com/vasko0z/WB_packer
 - При значимых изменениях — коммит: `git add .; git commit -m "тип: описание"`
 - Типы: `feat`, `fix`, `refactor`, `chore`, `docs`
@@ -20,11 +23,13 @@
 - **НЕ коммитить:** БД, логи, настройки, кэши, сборки, credentials
 
 ## Система документации
-- Журнал сессий: `SESSION_LOG.md` (вместо Obsidian)
+
+- Журнал сессий: `SESSION_LOG.md`
 - Версия: `VERSION` файл (semver), синхронизируется через `scripts/bump_version.py`
 - Подробнее: `docs/PROJECT_SYSTEM.md`
 
 ## Память
+
 - Долговременная память через MCP `superlocalmemory_*`
 - **Старт сессии** → `session_init(project_path=текущая_директория)`
 - **После задач/решений** → `observe` сохранять автоматически

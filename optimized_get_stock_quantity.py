@@ -4,98 +4,15 @@
 """
 import logging
 import json
-import threading
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import database
+from memory_manager import stock_cache
 from moysklad_api import MoyskladAPI
 from moysklad_logger import get_moysklad_logger
 
 logger = logging.getLogger(__name__)
 moysklad_logger = get_moysklad_logger()
-
-
-class OptimizedStockCache:
-    """Оптимизированный класс для кэширования остатков товаров"""
-    
-    def __init__(self, cache_duration_minutes=5):
-        self.cache = {}  # Словарь: {barcode: {'quantity': int, 'timestamp': datetime}}
-        self.cache_duration = timedelta(minutes=cache_duration_minutes)
-        self.lock = threading.RLock()  # Используем потокобезопасную блокировку
-        
-    def get_cached_quantities(self, barcodes: List[str]) -> Dict[str, int]:
-        """Получить кэшированные количества для списка штрихкодов"""
-        with self.lock:
-            result = {}
-            uncached_barcodes = []
-            
-            for barcode in barcodes:
-                if barcode in self.cache:
-                    cached_data = self.cache[barcode]
-                    if datetime.now() - cached_data['timestamp'] < self.cache_duration:
-                        result[barcode] = cached_data['quantity']
-                    else:
-                        # Удаляем устаревший кэш
-                        del self.cache[barcode]
-                        uncached_barcodes.append(barcode)
-                else:
-                    uncached_barcodes.append(barcode)
-            
-            # Если есть не кэшированные штрихкоды, пробуем получить из базы данных
-            if uncached_barcodes:
-                try:
-                    db_results = database.get_multiple_stock_cache(uncached_barcodes)
-                    for barcode in uncached_barcodes:
-                        if barcode in db_results:
-                            quantity = db_results[barcode]
-                            result[barcode] = quantity
-                            # Сохраняем в локальный кэш на будущее
-                            self.cache[barcode] = {
-                                'quantity': quantity,
-                                'timestamp': datetime.now()
-                            }
-                        else:
-                            # Если нет в базе, возвращаем 0
-                            result[barcode] = 0
-                except Exception as e:
-                    logger.error(f"Ошибка получения кэша остатков из базы данных: {e}")
-                    # В случае ошибки, возвращаем 0 для всех не кэшированных штрихкодов
-                    for barcode in uncached_barcodes:
-                        result[barcode] = 0
-            
-            return result
-
-    def set_cached_quantities(self, stock_data: Dict[str, int]):
-        """Сохранить количества для нескольких штрихкодов"""
-        with self.lock:
-            timestamp = datetime.now()
-            for barcode, quantity in stock_data.items():
-                self.cache[barcode] = {
-                    'quantity': quantity,
-                    'timestamp': timestamp
-                }
-            
-            # Также сохраняем в базу данных
-            try:
-                database.set_multiple_stock_cache(stock_data)
-            except Exception as e:
-                logger.error(f"Ошибка сохранения кэша остатков в базу данных: {e}")
-
-    def invalidate_cache(self):
-        """Очистить весь кэш"""
-        with self.lock:
-            self.cache.clear()
-            
-            # Также очищаем кэш в базе данных
-            try:
-                database.clear_stock_cache()
-            except Exception as e:
-                logger.error(f"Ошибка очистки кэша остатков в базе данных: {e}")
-
-
-# Глобальный экземпляр оптимизированного кэша
-optimized_stock_cache = OptimizedStockCache()
 
 
 def get_optimized_stock_quantities_force_update(ui_updater_instance, barcodes: List[str], progress_callback=None, current_user=None) -> Dict[str, int]:
@@ -309,7 +226,7 @@ def get_optimized_stock_quantities_force_update(ui_updater_instance, barcodes: L
                     logger.info(f"Штрихкод {barcode} не найден в МойСкладе, установлен остаток 0")
         
         # Обновляем кэш
-        optimized_stock_cache.set_cached_quantities(result)
+        stock_cache.set_cached_quantities(result)
         
         moysklad_logger.info(f"РЕЗУЛЬТАТ ОПТИМИЗИРОВАННОГО ПОЛУЧЕНИЯ ОСТАТКОВ:")
         moysklad_logger.info(f"Обработано штрихкодов: {len(result)}")
@@ -349,7 +266,7 @@ def get_optimized_stock_quantity_for_item(ui_updater_instance, barcode: str, cur
             return 0  # Если токен не настроен, возвращаем 0
 
         # Сначала пробуем получить из кэша
-        cached_qty = optimized_stock_cache.get_cached_quantities([barcode]).get(barcode)
+        cached_qty = stock_cache.get_cached_quantities([barcode]).get(barcode)
         if cached_qty is not None:
             return cached_qty
 
@@ -358,19 +275,19 @@ def get_optimized_stock_quantity_for_item(ui_updater_instance, barcode: str, cur
         quantity = result.get(barcode, 0)
         
         # Сохраняем в кэш
-        optimized_stock_cache.set_cached_quantities({barcode: quantity})
+        stock_cache.set_cached_quantities({barcode: quantity})
         return quantity
     except Exception as e:
         logger.error(f"Ошибка получения остатков для штрихкода {barcode} через API: {e}")
         # В случае ошибки, возвращаем кэшированное значение или 0
-        cached_qty = optimized_stock_cache.get_cached_quantities([barcode]).get(barcode)
+        cached_qty = stock_cache.get_cached_quantities([barcode]).get(barcode)
         if cached_qty is not None:
             return cached_qty
         else:
-            optimized_stock_cache.set_cached_quantities({barcode: 0})
+            stock_cache.set_cached_quantities({barcode: 0})
             return 0
 
 
-def invalidate_optimized_stock_cache():
+def invalidate_stock_cache():
     """Функция для очистки оптимизированного кэша остатков"""
-    optimized_stock_cache.invalidate_cache()
+    stock_cache.invalidate_cache()

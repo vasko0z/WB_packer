@@ -141,14 +141,9 @@ class MainWindow(QMainWindow):
 
             # Отложенная загрузка данных и применение настроек
             # Вызывается из main.py после показа окна
-            # QTimer.singleShot(100, self.deferred_initialization)
         except Exception as e:
             self.logger.error(f"Ошибка при инициализации главного окна: {e}", exc_info=True)
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при запуске приложения:\n{e}")
-        
-        # if not self.shipments and not self.group_shipments:
-        #     # Статус скрыт, сообщения не отображаются
-        #     # self.statusBar().showMessage("Нажмите «+ Поставка (F1)», чтобы начать")
         
 
     def _lazy_init_controllers(self):
@@ -226,10 +221,6 @@ class MainWindow(QMainWindow):
             self.initialization_complete = True
 
             self.logger.info("Отложенная инициализация завершена")
-
-            # if not self.shipments and not self.group_shipments:
-            #     # Статус скрыт, сообщения не отображаются
-            #     # self.statusBar().showMessage("Нажмите «+ Поставка (F1)», чтобы начать")
 
         except Exception as e:
             self.logger.error(f"Ошибка при отложенной инициализации: {e}", exc_info=True)
@@ -415,12 +406,6 @@ class MainWindow(QMainWindow):
         self.moysklad_sync_btn = QPushButton("МойСклад")
         self.check_stock_btn = QPushButton("Остаток")
 
-        # Кнопки подключены в mvc_controller.py через контроллер
-        # self.new_shipment_btn.clicked.connect(self.start_new_shipment)
-        # self.new_box_btn.clicked.connect(self.new_box)
-        # self.shipment_check_btn.clicked.connect(self.start_shipment_check)
-        # self.print_labels_btn.clicked.connect(...)
-        # Эти кнопки подключаем напрямую:
         self.moysklad_sync_btn.clicked.connect(self.sync_moysklad_stocks)
         self.check_stock_btn.clicked.connect(self.open_check_stock_dialog)
         self.new_shipment_gh_btn.clicked.connect(self.import_shipment_from_google_sheets)
@@ -1030,23 +1015,9 @@ class MainWindow(QMainWindow):
         self._init_timers_and_focus()
 
     def setup_shortcuts(self):
-        # Шорткаты теперь обрабатываются через MVC контроллер в mvc_controller.py
-        # QShortcut(QKeySequence("F1"), self).activated.connect(self.shipment_controller.handle_shipment_operations)
-        # QShortcut(QKeySequence("F2"), self).activated.connect(self.shipment_controller.handle_group_shipment_operations)
-        # QShortcut(QKeySequence("F3"), self).activated.connect(self.shipment_controller.handle_new_box)
-        # QShortcut(QKeySequence("F5"), self).activated.connect(self.ui_controller.handle_refresh)
-        # QShortcut(QKeySequence("F11"), self).activated.connect(self.ui_controller.handle_theme_shortcut)
-        # QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.ui_controller.handle_save_session)
-        # QShortcut(QKeySequence("Ctrl+P"), self).activated.connect(self.ui_controller.handle_print_label)
-        # QShortcut(QKeySequence("Ctrl+H"), self).activated.connect(self.ui_controller.handle_shipment_check) # Шорткат для "Проверка поставки"
-        
-        # Добавляем шорткат для пробела, чтобы перевести фокус на поле ввода штрихкода
         from PyQt6.QtGui import QKeySequence, QShortcut
         space_shortcut = QShortcut(QKeySequence("Space"), self)
         space_shortcut.activated.connect(self.focus_scan_input_field)
-        
-        # Теперь все шорткаты управляются через MVC контроллер, поставкляем этот метод для обратной совместимости
-        pass
 
     def toggle_theme_shortcut(self):
         """Toggle the theme between light and dark"""
@@ -1160,10 +1131,6 @@ class MainWindow(QMainWindow):
             # Update UI
             self.ui_updater.update_current_components()
             self.ui_updater.update_shipments_tree()
-            
-            # Show status message
-            # Статус скрыт, сообщения не отображаются
-            # self.statusBar().showMessage(f"Количество товара {barcode} изменено на {new_qty}", 3000)
             
             # Schedule a delayed save to the database
             if hasattr(self.shipment_manager, 'schedule_save'):
@@ -1357,8 +1324,6 @@ class MainWindow(QMainWindow):
                     # Загружаем состояние окна для нового пользователя
                     self.load_window_state()
                     self.update_user_display()
-                    # Статус скрыт, сообщения не отображаются
-                    # self.statusBar().showMessage(f"Пользователь изменен на: {self.current_user}", 300)
         except Exception as e:
             self.logger.error(f"Ошибка при управлении пользователями: {e}", exc_info=True)
             QMessageBox.critical(self, "Ошибка", f"Ошибка при управлении пользователями:\n{e}")
@@ -1533,9 +1498,6 @@ class MainWindow(QMainWindow):
             # Применяем загруженные цвета кнопок
             self.apply_button_colors()
             
-            # Система блокировки ппоставккуавок удалена, поэтому не загружаем эту настройку
-            # self.shipment_locking_enabled = settings["shipment_locking_enabled"]
-
             # Загружаем настройки видимости столбцов
             self.article_column_visible = settings.get("article_column_visible", True)
             self.name_column_visible = settings.get("name_column_visible", False)
@@ -2369,7 +2331,7 @@ class MainWindow(QMainWindow):
                 )
                 restored_items += 1
             
-            ph = "?" if get_db_type() == "sqlite" else "%s"
+            ph = database.get_db_placeholder()
             
             for shipment in group_shipment.sub_shipments.values():
                 shipment.invalidate_caches()
@@ -2694,9 +2656,6 @@ class MainWindow(QMainWindow):
                 self.ui_updater.update_current_components()
                 self.ui_updater.update_shipments_tree()
                 
-                # Статус скрыт, сообщения не отображаются
-                # self.statusBar().showMessage(f"Количество товара {shipment_item.barcode} изменено с {old_qty} на {new_qty}", 3000)
-                
                 # Структурное изменение — полное сохранение
                 if hasattr(self.shipment_manager, 'schedule_full_save'):
                     self.shipment_manager.schedule_full_save()
@@ -2773,9 +2732,6 @@ class MainWindow(QMainWindow):
             # Обновляем интерфейс
             self.ui_updater.update_current_components()
             self.ui_updater.update_shipments_tree()
-            
-            # Статус скрыт, сообщения не отображаются
-            # self.statusBar().showMessage(f"Добавлен товар {barcode} ({sku}) в количестве {qty}", 3000)
             
             # Полное сохранение (новый товар нужно добавить в shipment_items)
             if hasattr(self.shipment_manager, 'schedule_full_save'):
@@ -2960,9 +2916,6 @@ class MainWindow(QMainWindow):
             self.ui_updater.update_current_components(full_update=True)
             self.ui_updater.update_shipments_tree()
 
-            # Статус скрыт, сообщения не отображаются
-            # self.statusBar().showMessage(f"Выбрана поставка: {shipment.destination_name}", 3000)
-            
             # Обновляем активность пользователя в выбранной поставке
             self.update_user_activity()
             
@@ -2998,9 +2951,6 @@ class MainWindow(QMainWindow):
 
             # Применяем цвета кнопок заново, чтобы убедиться, что они не сбрасываются
             self.apply_button_colors()
-            # Статус скрыт, сообщения не отображаются
-            # self.statusBar().showMessage(f"Выбрана коробка: {box.box_id} в поставке {shipment.destination_name}", 300)
-            
             # Обновляем активность пользователя в выбранной поставке
             self.update_user_activity()
             
@@ -3085,26 +3035,6 @@ class MainWindow(QMainWindow):
                 self.data_controller.save_shipment(shipment)
             self.statusBar().showMessage(f"Свойства групповой поставки '{group_shipment.group_name}' сохранены", 3000)
     
-    # Система блокировки ппоставккуавок удалена, функция exit_shipment большеше не нуженна
-    # def exit_shipment(self, shipment):
-    #     """Выйти из поставки - освободить блокировку и снять выделение"""
-    #     try:
-    #         # Освобождаем блокировку поставки
-    #         self.release_shipment_lock(shipment)
-    #         
-    #         # Снимаем выделение с поставки если она текущующая
-    #         if self.current_shipment == shipment:
-    #             self.current_shipment = None
-    #         
-    #         # Обновляем интерфейс
-    #         if self.ui_updater:
-    #             self.ui_updater.update_shipments_tree()
-    #         
-    #         self.statusBar().showMessage(f"Вышли из поставки: {shipment.destination_name}", 3000)
-    #         
-    #     except Exception as e:
-    #         self.logger.error(f"Ошибка при выходе из поставки: {e}", exc_info=True)
-
     def show_shipment_context_menu(self, position):
         try:
             item = self.shipments_tree_widget.itemAt(position)
@@ -3198,10 +3128,6 @@ class MainWindow(QMainWindow):
                     # Устанавливаем выбранную ппоставккуавкиу как текущующую
                     self.current_shipment = shipment
                     self.show_shipment_properties(shipment.destination_name)
-# elif 'exit_action' in locals() and action == exit_action:  # Обработкатка выхода из поставки
-                #     # Устанавливаем выбранную ппоставккуавкиу как текущующую
-                #     self.current_shipment = shipment
-                #     self.exit_shipment(shipment)
 
             elif group_shipment:  # Это групповая поставка
                 archive_action = menu.addAction("📦 Отправить группу в архив")
@@ -3453,8 +3379,6 @@ class MainWindow(QMainWindow):
                 doc.save(file_path)
 
                 utils.play_sound(self.ok_sound, self.tone_sound)
-                # Статус скрыт, соо��щения не отображаются
-                # self.statusBar().showMessage(f"Лист на паллет сохранен: {file_path}", 5000)
                 QMessageBox.information(self, "Успех", "Лист на паллет успешно создан!")
 
             except Exception as e:
@@ -3618,14 +3542,8 @@ class MainWindow(QMainWindow):
     def start_shipment_check(self):
         """Начать проверку поставки с импорта Excel файла"""
         try:
-            # Create new shipment check dialog each time to avoid state issues
             shipment_check_dialog = ShipmentCheckDialog(self)
-            # Show the dialog
-            if shipment_check_dialog.exec() == QDialog.DialogCode.Accepted:
-                # Статус скрыт, сообщения не отображаются
-                # self.statusBar().showMessage("Проверка поставки начата", 3000)
-                pass
-            
+            shipment_check_dialog.exec()
         except Exception as e:
             self.logger.error(f"Ошибка при запуске проверки поставки: {e}", exc_info=True)
             QMessageBox.critical(self, "Ошибка", f"Не удалось запустить проверку поставки:\n{e}")
@@ -3707,8 +3625,6 @@ class MainWindow(QMainWindow):
             if not non_archived_shipments:
                 self.logger.info("Нет неархивных поставок для синхронизации остатков")
                 QMessageBox.information(self, "Информация", "Нет неархивных поставок для синхронизации остатков.")
-                # Статус скрыт, сообщения не отображаются
-                # self.statusBar().showMessage("Синхронизация остатков завершена", 3000)
                 return
             
             # Запускаем асинхронную синхронизацию

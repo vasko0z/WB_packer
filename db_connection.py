@@ -503,6 +503,15 @@ def is_sqlite_connection(conn):
     return False
 
 
+def get_db_placeholder():
+    """
+    Возвращает плейсхолдер для параметризованных запросов в зависимости от типа БД.
+    SQLite использует '?', PostgreSQL использует '%s'.
+    """
+    db_type = get_db_type()
+    return "?" if db_type == "sqlite" else "%s"
+
+
 def _clear_connection_pool():
     """
     Очистить пул соединений (используется после миграций БД)

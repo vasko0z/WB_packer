@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt, QTimer
 import database
 import config
 import utils
-from db_connection import _release_connection
+from db_connection import get_db_placeholder, _release_connection
 from models import Shipment, ShipmentItem, Box, GroupShipment, ShipmentProperties
 from dialogs import DestinationDialog, RenameDialog, ShipmentPropertiesDialog, BoxNumberDialog
 from app_constants import ColumnIndex, BoxColumnIndex
@@ -66,111 +66,31 @@ class ShipmentManager:
                     use_sqlite = is_sqlite_connection(conn)
                     
                     # Плейсхолдеры и синтаксис в зависимости от типа БД
-                    placeholder = "?" if use_sqlite else "%s"
-                    on_conflict = "INSERT OR REPLACE INTO" if use_sqlite else """INSERT INTO shipments (...) VALUES (...) ON CONFLICT (destination_name) DO UPDATE SET"""
+                    placeholder = get_db_placeholder()
+
+                    from data_controller import DataController
+                    ph = get_db_placeholder()
+                    sql, params = DataController._build_shipments_upsert(shipment, removed_items_json, parent_group, properties_json, archived_date, ph, use_sqlite)
+                    cursor.execute(sql, params)
 
                     if use_sqlite:
-                        # INSERT OR REPLACE приводит к DELETE + INSERT, что вызывает CASCADE удаление shipment_items
-                        # Используем INSERT ... ON CONFLICT DO UPDATE для сохранения связанных записей
-                        dest_name = shipment.destination_name.encode('utf-8').decode('utf-8')
-                        self.logger.debug(f"UPSERT shipments: dest_name={dest_name}, archived={1 if shipment.archived else 0}")
-                        
-                        cursor.execute(f"""
-                            INSERT INTO shipments (
-                                destination_name, font_size, label_font_size, theme,
-                                removed_items, parent_group, properties,
-                                archived, archived_date, archived_by
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT(destination_name) DO UPDATE SET
-                                font_size = excluded.font_size,
-                                label_font_size = excluded.label_font_size,
-                                theme = excluded.theme,
-                                removed_items = excluded.removed_items,
-                                parent_group = excluded.parent_group,
-                                properties = excluded.properties,
-                                archived = excluded.archived,
-                                archived_date = excluded.archived_date,
-                                archived_by = excluded.archived_by
-                        """, (
-                            dest_name,
-                            shipment.font_size,
-                            shipment.label_font_size,
-                            shipment.theme.encode('utf-8').decode('utf-8'),
-                            removed_items_json.encode('utf-8').decode('utf-8'),
-                            parent_group.encode('utf-8').decode('utf-8') if parent_group else None,
-                            properties_json.encode('utf-8').decode('utf-8'),
-                            1 if shipment.archived else 0,
-                            archived_date.encode('utf-8').decode('utf-8') if archived_date else None,
-                            shipment.archived_by.encode('utf-8').decode('utf-8') if shipment.archived_by else None
-                        ))
-                        
-                        self.logger.debug(f"UPSERT выполнен, lastrowid={cursor.lastrowid}")
-
-                        # Получаем ID поставки - сначала проверяем, есть ли shipment.shipment_id
                         if hasattr(shipment, 'shipment_id') and shipment.shipment_id:
                             shipment_id = shipment.shipment_id
                         else:
-                            # После INSERT OR REPLACE всегда делаем SELECT для получения ID
-                            dest_name = shipment.destination_name.encode('utf-8').decode('utf-8')
-
-                            # Делаем SELECT для получения ID
-                            cursor.execute(
-                                "SELECT id FROM shipments WHERE destination_name = ?",
-                                (dest_name,)
-                            )
+                            cursor.execute("SELECT id FROM shipments WHERE destination_name = ?", (shipment.destination_name,))
                             result = cursor.fetchone()
                             shipment_id = result[0] if result else None
-                            
-                            # Если не нашли, пробуем без кодировки
-                            if shipment_id is None:
-                                cursor.execute(
-                                    "SELECT id FROM shipments WHERE destination_name = ?",
-                                    (shipment.destination_name,)
-                                )
-                                result = cursor.fetchone()
-                                shipment_id = result[0] if result else None
-
                             if shipment_id is None:
                                 self.logger.error(f"Не удалось получить ID поставки {shipment.destination_name} после UPSERT")
-                                self.logger.error(f"Попытка поиска: {dest_name}")
-                                # Проверяем, что вообще есть в таблице
                                 cursor.execute("SELECT id, destination_name FROM shipments")
-                                all_shipments = cursor.fetchall()
-                                self.logger.error(f"Все поставки в БД: {all_shipments}")
+                                self.logger.error(f"Все поставки в БД: {cursor.fetchall()}")
                                 return
-                            
-                            # Сохраняем shipment_id в объект поставки для будущих сохранений
                             shipment.shipment_id = shipment_id
                     else:
-                        # Для PostgreSQL используем ON CONFLICT
-                        cursor.execute("""
-                            INSERT INTO shipments (destination_name, font_size, label_font_size, theme, removed_items, parent_group, properties, archived, archived_date, archived_by)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (destination_name) DO UPDATE SET
-                                font_size = EXCLUDED.font_size,
-                                label_font_size = EXCLUDED.label_font_size,
-                                theme = EXCLUDED.theme,
-                                removed_items = EXCLUDED.removed_items,
-                                parent_group = EXCLUDED.parent_group,
-                                properties = EXCLUDED.properties,
-                                archived = EXCLUDED.archived,
-                                archived_date = EXCLUDED.archived_date,
-                                archived_by = EXCLUDED.archived_by
-                            RETURNING id
-                        """, (
-                            shipment.destination_name.encode('utf-8').decode('utf-8'), 
-                            shipment.font_size, 
-                            shipment.label_font_size,
-                            shipment.theme.encode('utf-8').decode('utf-8'), 
-                            removed_items_json.encode('utf-8').decode('utf-8'),
-                            parent_group.encode('utf-8').decode('utf-8') if parent_group else None, 
-                            properties_json.encode('utf-8').decode('utf-8'),
-                            shipment.archived, 
-                            archived_date.encode('utf-8').decode('utf-8') if archived_date else None,
-                            shipment.archived_by.encode('utf-8').decode('utf-8') if shipment.archived_by else None
-                        ))
                         result = cursor.fetchone()
                         shipment_id = result[0] if result else None
+                        if shipment_id:
+                            shipment.shipment_id = shipment_id
 
                     # Проверяем, что shipment_id не равен None
                     if shipment_id is None:
@@ -213,8 +133,8 @@ class ShipmentManager:
                     # Подготавливаем данные
                     shipment_items_data = []
                     for item in shipment.shipment_items.values():
-                        barcode_val = item.barcode.encode('utf-8').decode('utf-8') if isinstance(item.barcode, str) else item.barcode
-                        sku_val = item.sku.encode('utf-8').decode('utf-8') if isinstance(item.sku, str) else item.sku
+                        barcode_val = item.barcode
+                        sku_val = item.sku
                         shipment_items_data.append((shipment_id, barcode_val, sku_val, item.total_qty, item.allocated_qty))
 
                     boxes_data = []
@@ -222,7 +142,7 @@ class ShipmentManager:
                         is_current = True if i == shipment.current_box_index else False
                         boxes_data.append((
                             shipment_id, 
-                            box.box_id.encode('utf-8').decode('utf-8') if isinstance(box.box_id, str) else box.box_id, 
+                            box.box_id, 
                             is_current
                         ))
 
@@ -255,7 +175,7 @@ class ShipmentManager:
                             placeholders = ','.join(['?'] * len(box_ids))
                             cursor.execute(
                                 f"SELECT id, box_id FROM boxes WHERE shipment_id = ? AND box_id IN ({placeholders})",
-                                [shipment_id] + [bid.encode('utf-8').decode('utf-8') if isinstance(bid, str) else bid for bid in box_ids]
+                                [shipment_id] + [bid for bid in box_ids]
                             )
                             box_id_map = {row[1]: row[0] for row in cursor.fetchall()}
                         else:
@@ -267,7 +187,7 @@ class ShipmentManager:
                             box_db_id = box_id_map.get(box.box_id)
                             if box_db_id:
                                 for barcode, qty in box.items.items():
-                                    barcode_val = barcode.encode('utf-8').decode('utf-8') if isinstance(barcode, str) else barcode
+                                    barcode_val = barcode
                                     sqlite_box_items_data.append((box_db_id, barcode_val, qty))
 
                         if sqlite_box_items_data:
@@ -314,10 +234,10 @@ class ShipmentManager:
                         # PostgreSQL: batch UPSERT box_items
                         box_items_data = []
                         for i, box in enumerate(shipment.boxes):
-                            box_db_id = box_id_map.get(box.box_id.encode('utf-8').decode('utf-8') if isinstance(box.box_id, str) else box.box_id)
+                            box_db_id = box_id_map.get(box.box_id)
                             if box_db_id:
                                 for barcode, qty in box.items.items():
-                                    barcode_val = barcode.encode('utf-8').decode('utf-8') if isinstance(barcode, str) else barcode
+                                    barcode_val = barcode
                                     box_items_data.append((box_db_id, barcode_val, qty))
 
                         if box_items_data:
@@ -724,7 +644,7 @@ class ShipmentManager:
             
             db_type = get_db_type()
             use_sqlite = db_type == "sqlite"
-            placeholder = "?" if use_sqlite else "%s"
+            placeholder = get_db_placeholder()
             
             queries = []
             
@@ -733,47 +653,11 @@ class ShipmentManager:
             properties_json = json.dumps(shipment.properties.to_dict(), ensure_ascii=False)
             archived_date = shipment.archived_date.isoformat() if shipment.archived_date else None
             
-            if use_sqlite:
-                # INSERT OR REPLACE приводит к DELETE + INSERT, что вызывает CASCADE удаление shipment_items
-                # Используем INSERT ... ON CONFLICT DO UPDATE для сохранения связанных записей
-                queries.append((
-                    """INSERT INTO shipments (
-                        destination_name, font_size, label_font_size, theme,
-                        removed_items, parent_group, properties,
-                        archived, archived_date, archived_by
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(destination_name) DO UPDATE SET
-                        font_size = excluded.font_size,
-                        label_font_size = excluded.label_font_size,
-                        theme = excluded.theme,
-                        removed_items = excluded.removed_items,
-                        parent_group = excluded.parent_group,
-                        properties = excluded.properties,
-                        archived = excluded.archived,
-                        archived_date = excluded.archived_date,
-                        archived_by = excluded.archived_by""",
-                    (shipment.destination_name, shipment.font_size, shipment.label_font_size,
-                     shipment.theme, removed_items_json,
-                     shipment.parent_group.group_name if shipment.parent_group else None,
-                     properties_json, 1 if shipment.archived else 0,
-                     archived_date, shipment.archived_by)
-                ))
-            else:
-                queries.append((
-                    """INSERT INTO shipments (destination_name, font_size, label_font_size, theme, removed_items, parent_group, properties, archived, archived_date, archived_by)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (destination_name) DO UPDATE SET
-                        font_size = EXCLUDED.font_size, label_font_size = EXCLUDED.label_font_size,
-                        theme = EXCLUDED.theme, removed_items = EXCLUDED.removed_items,
-                        parent_group = EXCLUDED.parent_group, properties = EXCLUDED.properties,
-                        archived = EXCLUDED.archived, archived_date = EXCLUDED.archived_date,
-                        archived_by = EXCLUDED.archived_by
-                    RETURNING id""",
-                    (shipment.destination_name, shipment.font_size, shipment.label_font_size,
-                     shipment.theme, removed_items_json,
-                     shipment.parent_group.group_name if shipment.parent_group else None,
-                     properties_json, shipment.archived, archived_date, shipment.archived_by)
-                ))
+            from data_controller import DataController
+            ph = placeholder
+            parent_group_name = shipment.parent_group.group_name if shipment.parent_group else None
+            sql, params = DataController._build_shipments_upsert(shipment, removed_items_json, parent_group_name, properties_json, archived_date, ph, use_sqlite)
+            queries.append((sql, params))
             
             # 2. Обновляем статус текущей коробки
             is_current = True if not use_sqlite else 1
@@ -974,10 +858,8 @@ class ShipmentManager:
         if items_added > 0:
             shipment_id = getattr(self.main_window.current_shipment, 'shipment_id', None)
             if shipment_id:
-                from database import get_db_type
-                from db_connection import execute_query
-                db_type = get_db_type()
-                ph = "?" if db_type == "sqlite" else "%s"
+                from db_connection import execute_query, get_db_placeholder
+                ph = get_db_placeholder()
                 for barcode, shipment_item in self.main_window.current_shipment.shipment_items.items():
                     if shipment_item.allocated_qty > 0:
                         execute_query(

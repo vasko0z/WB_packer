@@ -7,7 +7,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QMessageBox, QFileDialog, QDialog, QHeaderView
 from PyQt6.QtCore import Qt
 import database
-from db_connection import get_db_type, _release_connection
+from db_connection import get_db_placeholder, _release_connection
 import config
 import utils
 from models import Shipment, ShipmentItem, GroupShipment
@@ -245,12 +245,9 @@ class ShipmentOperations:
     def _update_existing_shipment_items(self, shipment, new_items):
         """Обновляет состав товара существующей подпоставки, сохраняя коробки и allocated_qty.
         new_items: dict[barcode] = (sku, total_qty)"""
-        from database import get_db_type
         from db_connection import execute_query, execute_many
         
-        db_type = get_db_type()
-        use_sqlite = db_type == "sqlite"
-        ph = "?" if use_sqlite else "%s"
+        ph = get_db_placeholder()
         
         try:
             shipment_id_result = execute_query(
@@ -315,7 +312,7 @@ class ShipmentOperations:
                     if item.total_qty != existing_barcodes[item.barcode]:
                         updates.append((item.total_qty, shipment_id, item.barcode))
                 else:
-                    sku_val = item.sku.encode('utf-8').decode('utf-8') if isinstance(item.sku, str) else item.sku
+                    sku_val = item.sku
                     inserts.append((shipment_id, item.barcode, sku_val, item.total_qty, item.allocated_qty))
             
             if deletes:
@@ -360,13 +357,10 @@ class ShipmentOperations:
     
     def _update_shipment_items_preserving_boxes(self, destination_name, shipment):
         """Обновляет total_qty товаров поставки, сохраняя существующие коробки и box_items"""
-        from database import get_db_type
         from db_connection import execute_query, execute_many
         from models import Box
         
-        db_type = get_db_type()
-        use_sqlite = db_type == "sqlite"
-        ph = "?" if use_sqlite else "%s"
+        ph = get_db_placeholder()
         
         try:
             shipment_id_result = execute_query(
@@ -447,7 +441,7 @@ class ShipmentOperations:
                     if item.total_qty != existing_barcodes[item.barcode]:
                         updates.append((item.total_qty, shipment_id, item.barcode))
                 else:
-                    sku_val = item.sku.encode('utf-8').decode('utf-8') if isinstance(item.sku, str) else item.sku
+                    sku_val = item.sku
                     inserts.append((shipment_id, item.barcode, sku_val, item.total_qty, item.allocated_qty))
             
             if updates:
@@ -1116,8 +1110,7 @@ class ShipmentOperations:
 
             # Используем функцию из модуля database для корректного удаления поставки и всех связанных данных
             # Сначала проверяем, архивирована ли поставка
-            db_type = get_db_type()
-            placeholder = "?" if db_type == "sqlite" else "%s"
+            placeholder = get_db_placeholder()
             
             conn = database.get_connection()
             cursor = conn.cursor()

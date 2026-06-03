@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from collections import OrderedDict
 import config  # Добавляем импорт config
-from db_connection import execute_query, execute_many, get_connection, _release_connection, get_db_type
+from db_connection import execute_query, execute_many, get_connection, _release_connection, get_db_type, get_db_placeholder
 # PostgreSQL is the only supported database
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def get_product_names_by_barcodes(barcodes: List[str]) -> Dict[str, str]:
            return result
        
        db_type = get_db_type()
-       placeholder = "%s" if db_type != "sqlite" else "?"
+       placeholder = get_db_placeholder()
        placeholders = ','.join([placeholder] * len(uncached_barcodes))
 
        # Этап 1: Быстрый запрос по точному совпадению (использует индекс)
@@ -158,35 +158,18 @@ def get_product_names_by_barcodes(barcodes: List[str]) -> Dict[str, str]:
        return name_dict
    except Exception as e:
        logger.error(f"Ошибка при получении наименований по штрихкодам: {e}", exc_info=True)
-       return {}
+       return {}
 
-
-_STOCK_QTY_CACHE_MAX = 5000
-_STOCK_QTY_CACHE_SECONDS = 60
-_stock_qty_cache: OrderedDict[str, Optional[int]] = OrderedDict()
-_stock_qty_cache_ttl: OrderedDict[str, float] = OrderedDict()
 
 def get_stock_cache(barcode: str) -> Optional[int]:
-    """Получает кэшированное количество остатков для штрихкода (с локальным кэшем)"""
-    global _stock_qty_cache, _stock_qty_cache_ttl
-    import time
-    now = time.time()
-    if barcode in _stock_qty_cache and barcode in _stock_qty_cache_ttl:
-        if now - _stock_qty_cache_ttl[barcode] < _STOCK_QTY_CACHE_SECONDS:
-            _stock_qty_cache.move_to_end(barcode)
-            return _stock_qty_cache[barcode]
+    """Получает кэшированное количество остатков для штрихкода"""
     try:
         result = execute_query(
             "SELECT quantity FROM stock_cache WHERE barcode = %s",
             (barcode,),
             fetchone=True
         )
-        qty = result[0] if result else None
-        _stock_qty_cache[barcode] = qty
-        _stock_qty_cache.move_to_end(barcode)
-        _stock_qty_cache_ttl[barcode] = now
-        _evict_cache(_stock_qty_cache, _stock_qty_cache_ttl, _STOCK_QTY_CACHE_MAX)
-        return qty
+        return result[0] if result else None
     except Exception as e:
         logger.error(f"Ошибка получения кэша остатков для {barcode}: {e}")
         return None
@@ -194,54 +177,21 @@ def get_stock_cache(barcode: str) -> Optional[int]:
 
 def get_stock_cache_batch(barcodes: List[str]) -> Dict[str, Optional[int]]:
     """Batch-загрузка остатков для множества штрихкодов одним запросом"""
-    import time
-    now = time.time()
-    result = {}
-
-    uncached = []
-    for bc in barcodes:
-        if bc in _stock_qty_cache and bc in _stock_qty_cache_ttl:
-            if now - _stock_qty_cache_ttl[bc] < _STOCK_QTY_CACHE_SECONDS:
-                _stock_qty_cache.move_to_end(bc)
-                result[bc] = _stock_qty_cache[bc]
-                continue
-        uncached.append(bc)
-
-    if not uncached:
-        return result
+    if not barcodes:
+        return {}
 
     try:
-        db_type = get_db_type()
-        placeholder = "?" if db_type == "sqlite" else "%s"
-        placeholders = ','.join([placeholder] * len(uncached))
+        placeholder = get_db_placeholder()
+        placeholders = ','.join([placeholder] * len(barcodes))
         rows = execute_query(
             f"SELECT barcode, quantity FROM stock_cache WHERE barcode IN ({placeholders})",
-            tuple(uncached),
+            tuple(barcodes),
             fetchall=True
         )
-        db_map = {row[0]: row[1] for row in rows} if rows else {}
-
-        for bc in uncached:
-            qty = db_map.get(bc)
-            _stock_qty_cache[bc] = qty
-            _stock_qty_cache.move_to_end(bc)
-            _stock_qty_cache_ttl[bc] = now
-            result[bc] = qty
-
-        for bc in uncached:
-            if bc not in result:
-                result[bc] = None
-                _stock_qty_cache[bc] = None
-                _stock_qty_cache.move_to_end(bc)
-                _stock_qty_cache_ttl[bc] = now
-
-        _evict_cache(_stock_qty_cache, _stock_qty_cache_ttl, _STOCK_QTY_CACHE_MAX)
+        return {row[0]: row[1] for row in rows} if rows else {}
     except Exception as e:
         logger.error(f"Ошибка batch-загрузки остатков: {e}")
-        for bc in uncached:
-            result[bc] = None
-
-    return result
+        return {}
 
 
 def set_stock_cache(barcode: str, quantity: Optional[int]) -> None:
@@ -267,6 +217,54 @@ def set_stock_cache(barcode: str, quantity: Optional[int]) -> None:
             )
     except Exception as e:
         logger.error(f"Ошибка обновления кэша остатков для {barcode}: {e}")
+
+
+def set_multiple_stock_cache(stock_data: Dict[str, Optional[int]]) -> None:
+    """Массово обновляет кэш остатков в базе данных"""
+    if not stock_data:
+        return
+    try:
+        db_type = get_db_type()
+        if db_type == "sqlite":
+            execute_many(
+                "INSERT OR REPLACE INTO stock_cache (barcode, quantity) VALUES (?, ?)",
+                [(b, q) for b, q in stock_data.items()]
+            )
+        else:
+            execute_many(
+                "INSERT INTO stock_cache (barcode, quantity) VALUES (%s, %s) "
+                "ON CONFLICT (barcode) DO UPDATE SET quantity = EXCLUDED.quantity",
+                [(b, q) for b, q in stock_data.items()]
+            )
+    except Exception as e:
+        logger.error(f"Ошибка массового обновления кэша остатков: {e}", exc_info=True)
+
+
+def clear_stock_cache() -> None:
+    """Очищает таблицу stock_cache в базе данных"""
+    try:
+        execute_query("DELETE FROM stock_cache")
+    except Exception as e:
+        logger.error(f"Ошибка очистки кэша остатков: {e}", exc_info=True)
+
+
+def get_multiple_stock_cache(barcodes: List[str]) -> Dict[str, Optional[int]]:
+    """Получает остатки из БД для списка штрихкодов (без локального кэша)"""
+    if not barcodes:
+        return {}
+    try:
+        db_type = get_db_type()
+        placeholder = get_db_placeholder()
+        placeholders = ",".join([placeholder] * len(barcodes))
+        results = execute_query(
+            f"SELECT barcode, quantity FROM stock_cache WHERE barcode IN ({placeholders})",
+            barcodes,
+            fetchall=True
+        )
+        return {row[0]: row[1] for row in results} if results else {}
+    except Exception as e:
+        logger.error(f"Ошибка получения остатков из БД: {e}", exc_info=True)
+        return {}
 
 
 # Глобальный флаг: схема БД уже проверена и актуальна
@@ -1665,8 +1663,7 @@ def get_user_settings(username):
             return _user_settings_cache[username]
     
     try:
-        db_type = get_db_type()
-        placeholder = "?" if db_type == "sqlite" else "%s"
+        placeholder = get_db_placeholder()
 
         result = execute_query(
             f"""
@@ -1795,22 +1792,6 @@ def set_user_settings(username, font_size, label_font_size, theme, ok_sound, err
         except Exception as e:
             logger.debug(f"Проверка/добавление колонки button_colors: {e}")
         
-        # Ensure all string data is properly encoded
-        encoded_username = username.encode('utf-8').decode('utf-8') if isinstance(username, str) else username
-        encoded_theme = theme.encode('utf-8').decode('utf-8') if isinstance(theme, str) else theme
-        encoded_ok_sound = ok_sound.encode('utf-8').decode('utf-8') if isinstance(ok_sound, str) else ok_sound
-        encoded_error_sound = error_sound.encode('utf-8').decode('utf-8') if isinstance(error_sound, str) else error_sound
-        encoded_shipment_columns_width = shipment_columns_width.encode('utf-8').decode('utf-8') if isinstance(shipment_columns_width, str) else shipment_columns_width
-        encoded_box_columns_width = box_columns_width.encode('utf-8').decode('utf-8') if isinstance(box_columns_width, str) else box_columns_width
-        encoded_main_splitter_sizes = main_splitter_sizes.encode('utf-8').decode('utf-8') if isinstance(main_splitter_sizes, str) else main_splitter_sizes
-        encoded_button_primary_color = button_primary_color.encode('utf-8').decode('utf-8') if isinstance(button_primary_color, str) else button_primary_color
-        encoded_button_success_color = button_success_color.encode('utf-8').decode('utf-8') if isinstance(button_success_color, str) else button_success_color
-        encoded_button_warning_color = button_warning_color.encode('utf-8').decode('utf-8') if isinstance(button_warning_color, str) else button_warning_color
-        encoded_button_danger_color = button_danger_color.encode('utf-8').decode('utf-8') if isinstance(button_danger_color, str) else button_danger_color
-        encoded_moysklad_token = moysklad_token.encode('utf-8').decode('utf-8') if isinstance(moysklad_token, str) else moysklad_token
-        encoded_moysklad_stores = moysklad_stores.encode('utf-8').decode('utf-8') if isinstance(moysklad_stores, str) else moysklad_stores
-        encoded_button_colors = button_colors.encode('utf-8').decode('utf-8') if isinstance(button_colors, str) else button_colors
-
         db_type = get_db_type()
 
         if db_type == "sqlite":
@@ -1826,13 +1807,13 @@ def set_user_settings(username, font_size, label_font_size, theme, ok_sound, err
                  cached_server_ip, colored_buttons, button_colors)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (encoded_username, font_size, label_font_size, encoded_theme, encoded_ok_sound, encoded_error_sound,
+                (username, font_size, label_font_size, theme, ok_sound, error_sound,
                  1 if tone_sound else 0, sound_volume,
-                 encoded_shipment_columns_width, encoded_box_columns_width, encoded_main_splitter_sizes, window_width, window_height,
-                 encoded_button_primary_color, encoded_button_success_color, encoded_button_warning_color, encoded_button_danger_color,
-                 encoded_moysklad_token, encoded_moysklad_stores, moysklad_enabled, shipment_locking_enabled,
+                 shipment_columns_width, box_columns_width, main_splitter_sizes, window_width, window_height,
+                 button_primary_color, button_success_color, button_warning_color, button_danger_color,
+                 moysklad_token, moysklad_stores, moysklad_enabled, shipment_locking_enabled,
                  article_column_visible, name_column_visible, total_qty_column_visible, stock_column_visible, hide_completed_items,
-                 cached_server_ip, 1 if colored_buttons else 0, encoded_button_colors)
+                 cached_server_ip, 1 if colored_buttons else 0, button_colors)
             )
         else:
             # PostgreSQL использует ON CONFLICT DO UPDATE
@@ -1887,13 +1868,13 @@ def set_user_settings(username, font_size, label_font_size, theme, ok_sound, err
                     colored_buttons = EXCLUDED.colored_buttons,
                     button_colors = EXCLUDED.button_colors
                 """,
-                (encoded_username, font_size, label_font_size, encoded_theme, encoded_ok_sound, encoded_error_sound,
+                (username, font_size, label_font_size, theme, ok_sound, error_sound,
                  tone_sound_bool, sound_volume,
-                 encoded_shipment_columns_width, encoded_box_columns_width, encoded_main_splitter_sizes, window_width, window_height,
-                 encoded_button_primary_color, encoded_button_success_color, encoded_button_warning_color, encoded_button_danger_color,
-                 encoded_moysklad_token, encoded_moysklad_stores, moysklad_enabled_bool, shipment_locking_enabled_bool,
+                 shipment_columns_width, box_columns_width, main_splitter_sizes, window_width, window_height,
+                 button_primary_color, button_success_color, button_warning_color, button_danger_color,
+                 moysklad_token, moysklad_stores, moysklad_enabled_bool, shipment_locking_enabled_bool,
                  article_column_visible_bool, name_column_visible_bool, total_qty_column_visible_bool, stock_column_visible_bool, hide_completed_items_bool,
-                 cached_server_ip, colored_buttons_bool, encoded_button_colors)
+                 cached_server_ip, colored_buttons_bool, button_colors)
              )
         # Инвалидируем кэш настроек пользователя
         global _user_settings_cache, _user_settings_cache_ttl
@@ -2022,8 +2003,7 @@ def unarchive_shipment(shipment_name):
 def delete_archived_shipment(shipment_name):
     """Удалить архивированную поставку"""
     try:
-        db_type = get_db_type()
-        placeholder = "?" if db_type == "sqlite" else "%s"
+        placeholder = get_db_placeholder()
         
         conn = get_connection()
         cursor = conn.cursor()

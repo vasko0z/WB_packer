@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt, QSizeF, QThread, pyqtSignal, QObject
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 from PyQt6.QtGui import QFont, QPageSize, QPageLayout, QPainter, QPen, QImage, QPixmap, QIntValidator
 import pandas as pd
+import utils
 
 # Import PyMuPDF (fitz) for PDF handling - optional dependency with fallback
 try:
@@ -181,85 +182,16 @@ def create_and_print_transport_label(printer, destination, box_id):
        import tempfile
        from reportlab.pdfgen import canvas
        from reportlab.lib.units import mm
-       from reportlab.pdfbase import pdfmetrics
-       from reportlab.pdfbase.ttfonts import TTFont
-       
-       # Попробуем использовать шрифт, который поддерживает кириллицу
-       font_name_regular = 'Helvetica'
-       font_name_bold = 'Helvetica-Bold'
-       
-       try:
-           font_path = None
-           possible_fonts = [
-               "arial.ttf", "Arial.ttf", "ARIAL.TTF",
-               "LiberationSans-Regular.ttf", "DejaVuSans.ttf",
-               "calibri.ttf", "Calibri.ttf", "CALIBRI.TTF"
-           ]
-           
-           for font_name in possible_fonts:
-               if os.path.exists(font_name):
-                   font_path = font_name
-                   break
-               system_font_paths = [
-                   r"C:\Windows\Fonts\\" + font_name,
-                   r"/usr/share/fonts/truetype/dejavu/" + font_name,
-                   r"/System/Library/Fonts/" + font_name
-               ]
-               for path in system_font_paths:
-                   if os.path.exists(path):
-                       font_path = path
-                       break
-               if font_path:
-                   break
-           
-           if font_path:
-               pdfmetrics.registerFont(TTFont('CyrillicRegular', font_path))
-               font_name_regular = 'CyrillicRegular'
-               
-               bold_font_path = None
-               possible_bold_fonts = [
-                   font_path.replace('.ttf', ' Bold.ttf').replace('.TTF', ' Bold.TTF'),
-                   font_path.replace('Regular', 'Bold'),
-                   font_path.replace('regular', 'bold'),
-                   "arialbd.ttf", "Arial Bold.ttf", "ARIALBD.TTF",
-                   "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf"
-               ]
-               
-               for bold_path in possible_bold_fonts:
-                   if os.path.exists(bold_path):
-                       bold_font_path = bold_path
-                       break
-                   for path in system_font_paths:
-                       if 'Fonts' in path:
-                           bold_sys_path = path.replace(os.path.basename(path), os.path.basename(bold_path))
-                           if os.path.exists(bold_sys_path):
-                               bold_font_path = bold_sys_path
-                               break
-                   if bold_font_path:
-                       break
-               
-               if bold_font_path:
-                   pdfmetrics.registerFont(TTFont('CyrillicBold', bold_font_path))
-                   font_name_bold = 'CyrillicBold'
-               else:
-                   font_name_bold = 'CyrillicRegular'
-       except:
-           pass
+
+       font_name_regular, _ = utils.find_and_register_font(bold=False)
+       font_name_bold, _ = utils.find_and_register_font(bold=True)
        
        buffer = io.BytesIO()
-       # Стандартный размер этикетки 58x40 мм
        c = canvas.Canvas(buffer, pagesize=(58*mm, 40*mm))
        
-       # Центрируем весь контент по вертикали
-       # Общая высота содержимого: название (2 строки) + отступ + "Коробка" + отступ + номер
-       # Примерно: 12pt + 12pt + 5mm + 12pt + 5mm + 24pt = ~60mm
-       # Центральная позиция для вертикального центрирования
-       
-       # Рисуем название направления (Поставка) - крупный шрифт, центрировано
        c.setFont(font_name_bold, 18)
        dest_text = str(destination)
        
-       # Если название слишком длинное, уменьшаем шрифт
        if len(dest_text) > 14:
            c.setFont(font_name_bold, 16)
        if len(dest_text) > 16:
@@ -269,15 +201,10 @@ def create_and_print_transport_label(printer, destination, box_id):
            
        c.drawCentredString(29*mm, 28*mm, dest_text)
        
-       # Отступ
-       
-       # Рисуем "Коробка" - средний шрифт
        c.setFont(font_name_regular, 14)
        c.drawCentredString(29*mm, 18*mm, "Коробка")
        
-       # Рисуем номер коробки - крупный шрифт
        c.setFont(font_name_bold, 24)
-       # Извлекаем только номер из "Коробка-1" или оставляем как есть
        box_num = str(box_id)
        if "-" in box_num:
            box_num = box_num.split("-")[-1]
@@ -299,11 +226,11 @@ def create_and_print_transport_label(printer, destination, box_id):
        
        try:
            os.remove(temp_pdf_path)
-       except:
+       except OSError:
            pass
            
        return result
-       
+        
    except Exception as e:
        from PyQt6.QtWidgets import QMessageBox
        QMessageBox.critical(None, "Ошибка", f"Ошибка при создании транспортной этикетки: {str(e)}")
@@ -378,77 +305,8 @@ def create_and_print_box_label(printer, barcode, article, name):
            QMessageBox.critical(None, "Ошибка", "Модуль reportlab не установлен. Установите его с помощью: pip install reportlab")
            return False
        
-       # Попробуем использовать шрифт, который поддерживает кириллицу
-       try:
-           # Попробуем использовать шрифт Arial Unicode MS или Liberation Sans
-           font_path = None
-           possible_fonts = [
-               "arial.ttf", "Arial.ttf", "ARIAL.TTF",
-               "LiberationSans-Regular.ttf", "DejaVuSans.ttf",
-               "calibri.ttf", "Calibri.ttf", "CALIBRI.TTF"
-           ]
-           
-           for font_name in possible_fonts:
-               if os.path.exists(font_name):
-                   font_path = font_name
-                   break
-               # Также проверим в системных каталогах
-               system_font_paths = [
-                   r"C:\Windows\Fonts\%s" % font_name,
-                   r"/usr/share/fonts/truetype/dejavu/%s" % font_name,
-                   r"/System/Library/Fonts/%s" % font_name
-               ]
-               for path in system_font_paths:
-                   if os.path.exists(path):
-                       font_path = path
-                       break
-               if font_path:
-                   break
-           
-           if font_path:
-               # Регистрируем шрифты
-               pdfmetrics.registerFont(TTFont('CyrillicRegular', font_path))
-               
-               # Попробуем найти шрифт для жирного начертания
-               bold_font_path = None
-               possible_bold_fonts = [
-                   font_path.replace('.ttf', ' Bold.ttf').replace('.TTF', ' Bold.TTF'),
-                   font_path.replace('Regular', 'Bold'),
-                   font_path.replace('regular', 'bold'),
-                   "arialbd.ttf", "Arial Bold.ttf", "ARIALBD.TTF",
-                   "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf"
-               ]
-               
-               for bold_path in possible_bold_fonts:
-                   if os.path.exists(bold_path):
-                       bold_font_path = bold_path
-                       break
-                   # Проверим системные каталоги для жирного шрифта
-                   for path in system_font_paths:
-                       if 'Fonts' in path:
-                           bold_sys_path = path.replace(os.path.basename(path), os.path.basename(bold_path))
-                           if os.path.exists(bold_sys_path):
-                               bold_font_path = bold_sys_path
-                               break
-                   if bold_font_path:
-                       break
-               
-               if bold_font_path:
-                   pdfmetrics.registerFont(TTFont('CyrillicBold', bold_font_path))
-                   font_name_regular = 'CyrillicRegular'
-                   font_name_bold = 'CyrillicBold'
-               else:
-                   # Если жирный шрифт не найден, используем обычный для обоих случаев
-                   font_name_regular = 'CyrillicRegular'
-                   font_name_bold = 'CyrillicRegular'  # Используем обычный шрифт, но позже вручную сделаем жирным
-           else:
-               # Если не найден подходящий шрифт, используем стандартные, но с дополнительной обработкой
-               font_name_regular = 'Helvetica'
-               font_name_bold = 'Helvetica-Bold'
-       except:
-           # В случае ошибки при регистрации шрифта, используем стандартные шрифты
-           font_name_regular = 'Helvetica'
-           font_name_bold = 'Helvetica-Bold'
+       font_name_regular, _ = utils.find_and_register_font(bold=False)
+       font_name_bold, _ = utils.find_and_register_font(bold=True)
        
        buffer = io.BytesIO()
        c = canvas.Canvas(buffer, pagesize=(60*mm, 40*mm))  # 60x40 мм - размер этикетки
@@ -461,28 +319,28 @@ def create_and_print_box_label(printer, barcode, article, name):
        # Печатаем заголовки и значения с поддержкой кириллицы
        c.setFont(font_name_bold, title_font_size)
        # Используем encode/decode для правильной обработки кириллических символов
-       header_article = "Артикул:".encode('utf-8').decode('utf-8')
+       header_article = "Артикул:"
        c.drawString(x_margin, y_position, header_article)
        y_position -= line_spacing
        
        c.setFont(font_name_regular, value_font_size)
        for line in article_lines:
            # Убедимся, что строка в правильной кодировке
-           safe_line = line.encode('utf-8').decode('utf-8') if isinstance(line, str) else str(line)
+           safe_line = line if isinstance(line, str) else str(line)
            c.drawString(x_margin, y_position, safe_line)
            y_position -= line_spacing
        
        y_position -= line_spacing  # Дополнительный отступ перед следующим полем
        
        c.setFont(font_name_bold, title_font_size)
-       header_name = "Наименование:".encode('utf-8').decode('utf-8')
+       header_name = "Наименование:"
        c.drawString(x_margin, y_position, header_name)
        y_position -= line_spacing
        
        c.setFont(font_name_regular, value_font_size)
        for line in name_lines:
            # Убедимся, что строка в правильной кодировке
-           safe_line = line.encode('utf-8').decode('utf-8') if isinstance(line, str) else str(line)
+           safe_line = line if isinstance(line, str) else str(line)
            c.drawString(x_margin, y_position, safe_line)
            y_position -= line_spacing
        
@@ -493,7 +351,7 @@ def create_and_print_box_label(printer, barcode, article, name):
        c.setFont(font_name_regular, barcode_font_size)
        for line in barcode_lines:
            # Выводим только цифровой штрихкод
-           safe_line = line.encode('utf-8').decode('utf-8') if isinstance(line, str) else str(line)
+           safe_line = line if isinstance(line, str) else str(line)
            c.drawString(x_margin, y_position, safe_line)
            y_position -= line_spacing
        
@@ -515,11 +373,11 @@ def create_and_print_box_label(printer, barcode, article, name):
        # Удаляем временный файл после печати
        try:
            os.remove(temp_pdf_path)
-       except:
-           pass  # Игнорируем ошибки при удалении временного файла
-       
+       except OSError:
+           pass
+        
        return result
-       
+        
    except Exception as e:
        QMessageBox.critical(None, "Ошибка", f"Ошибка при создании этикетки: {str(e)}")
        return False
@@ -862,8 +720,6 @@ class LabelPrintDialog(QDialog):
         try:
             from reportlab.pdfgen import canvas
             from reportlab.lib.units import mm
-            from reportlab.pdfbase import pdfmetrics
-            from reportlab.pdfbase.ttfonts import TTFont
             import tempfile
             import os
             import sys
@@ -875,43 +731,7 @@ class LabelPrintDialog(QDialog):
             # Создаем PDF (размер этикетки 58x40 мм)
             c = canvas.Canvas(pdf_path, pagesize=(58*mm, 40*mm))
 
-            # Регистрируем шрифт с поддержкой кириллицы
-            font_path = None
-            possible_fonts = [
-                "arial.ttf", "Arial.ttf", "ARIAL.TTF",
-                "LiberationSans-Regular.ttf", "DejaVuSans.ttf",
-                "calibri.ttf", "Calibri.ttf", "CALIBRI.TTF",
-                "times.ttf", "Times.ttf", "TIMES.TTF"
-            ]
-
-            for font_name in possible_fonts:
-                if os.path.exists(font_name):
-                    font_path = font_name
-                    break
-                # Также проверим в системных каталогах
-                system_font_paths = [
-                    r"C:\Windows\Fonts\%s" % font_name,
-                    r"/usr/share/fonts/truetype/dejavu/%s" % font_name,
-                    r"/usr/share/fonts/truetype/liberation/%s" % font_name,
-                    r"/System/Library/Fonts/%s" % font_name
-                ]
-                for path in system_font_paths:
-                    if os.path.exists(path):
-                        font_path = path
-                        break
-                if font_path:
-                    break
-
-            if font_path:
-                try:
-                    # Регистрируем шрифт для кириллицы
-                    pdfmetrics.registerFont(TTFont('CyrillicFont', font_path))
-                    font_name = 'CyrillicFont'
-                except Exception as e:
-                    logger.warning(f"Не удалось зарегистрировать шрифт {font_path}: {e}")
-                    font_name = "Helvetica-Bold"
-            else:
-                font_name = "Helvetica-Bold"
+            font_name, _ = utils.find_and_register_font(bold=True)
 
             c.setFont(font_name, font_size)
             
@@ -942,8 +762,8 @@ class LabelPrintDialog(QDialog):
             # Удаляем временный файл после печати
             try:
                 os.remove(pdf_path)
-            except:
-                pass  # Игнорируем ошибки при удалении временного файла
+            except OSError:
+                pass
 
             if not result:
                 QMessageBox.warning(

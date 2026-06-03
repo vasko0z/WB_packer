@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Модуль управления версией приложения WB_packer
 Версия читается из файла VERSION (единый источник версии)
@@ -30,7 +29,7 @@ VERSION_MINOR = _VERSION[1]
 VERSION_PATCH = _VERSION[2]
 
 # BUILD — остаётся в коде для совместимости; обновляется через scripts/bump_version.py
-VERSION_BUILD = 16  # Сборка: исправлено обновление групповой поставки из Google Sheets (удаление товаров, UPSERT без CASCADE)
+VERSION_BUILD = 17  # Сборка: исправлено обновление групповой поставки из Google Sheets (удаление товаров, UPSERT без CASCADE)
 
 
 def get_version_file_path():

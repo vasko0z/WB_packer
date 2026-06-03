@@ -212,8 +212,8 @@ class ManagedCache:
                 return data.__sizeof__()
             else:
                 return 32  # Дефолтный размер для объектов
-        except:
-            return 64  # Если не можем оценить, предполагаем средний размер
+        except (AttributeError, TypeError):
+            return 64
     
     def put(self, key: str, data: Any) -> None:
         """Добавить данные в кэш"""
@@ -419,3 +419,115 @@ class TemporaryDataManager:
 # Автоматическая очистка при завершении программы
 import atexit
 atexit.register(lambda: memory_manager.force_garbage_collection())
+
+
+class StockCache:
+    """
+    Единый класс кэширования остатков с TTL, групповыми операциями и контролем размера.
+    Заменяет старые StockCache, OptimizedStockCache и EnhancedStockCache.
+    """
+
+    def __init__(self, cache_duration_minutes=5, max_cache_size=10000):
+        self.cache = ManagedCache(
+            name="stock_cache",
+            max_size=max_cache_size,
+            ttl_seconds=cache_duration_minutes * 60,
+            max_memory_mb=100,
+            cleanup_interval=300
+        )
+        self.cache_duration = timedelta(minutes=cache_duration_minutes)
+        self.lock = threading.RLock()
+        self.bulk_cache = ManagedCache(
+            name="stock_bulk_cache",
+            max_size=1000,
+            ttl_seconds=cache_duration_minutes * 60,
+            max_memory_mb=50
+        )
+
+    def get_cached_quantity(self, barcode: str) -> Optional[int]:
+        """Получить кэшированное количество для одного штрихкода"""
+        return self.cache.get(barcode)
+
+    def get_cached_quantities(self, barcodes: List[str]) -> Dict[str, int]:
+        """Получить кэшированные количества для списка штрихкодов"""
+        result = {}
+        uncached_barcodes = []
+
+        for barcode in barcodes:
+            cached_data = self.cache.get(barcode)
+            if cached_data is not None:
+                result[barcode] = cached_data
+            else:
+                uncached_barcodes.append(barcode)
+
+        if uncached_barcodes:
+            try:
+                from database import get_multiple_stock_cache
+                db_results = get_multiple_stock_cache(uncached_barcodes)
+
+                for barcode in uncached_barcodes:
+                    if barcode in db_results:
+                        quantity = db_results[barcode]
+                        result[barcode] = quantity
+                        self.cache.put(barcode, quantity)
+                    else:
+                        result[barcode] = 0
+            except Exception as e:
+                logger.error(f"Ошибка получения кэша остатков из базы данных: {e}")
+                for barcode in uncached_barcodes:
+                    result[barcode] = 0
+
+        return result
+
+    def set_cached_quantity(self, barcode: str, quantity: int):
+        """Сохранить количество для одного штрихкода"""
+        self.cache.put(barcode, quantity)
+        try:
+            from database import set_stock_cache
+            set_stock_cache(barcode, quantity)
+        except Exception as e:
+            logger.error(f"Ошибка сохранения кэша в базу данных: {e}")
+
+    def set_cached_quantities(self, stock_data: Dict[str, int]):
+        """Сохранить количества для нескольких штрихкодов"""
+        for barcode, quantity in stock_data.items():
+            self.cache.put(barcode, quantity)
+
+        try:
+            from database import set_multiple_stock_cache
+            set_multiple_stock_cache(stock_data)
+        except Exception as e:
+            logger.error(f"Ошибка сохранения кэша остатков в базу данных: {e}")
+
+    def invalidate_cache(self):
+        """Очистить весь кэш"""
+        self.cache.clear()
+        self.bulk_cache.clear()
+        try:
+            from database import clear_stock_cache
+            clear_stock_cache()
+        except Exception as e:
+            logger.error(f"Ошибка очистки кэша остатков в базе данных: {e}")
+
+    def clear_cache_for_barcodes(self, barcodes: List[str]):
+        """Очистить кэш для указанных штрихкодов"""
+        for barcode in barcodes:
+            self.cache.invalidate(barcode)
+
+        zero_data = {barcode: 0 for barcode in barcodes}
+        try:
+            from database import set_multiple_stock_cache
+            set_multiple_stock_cache(zero_data)
+        except Exception as e:
+            logger.error(f"Ошибка обновления кэша в базе данных при очистке: {e}")
+
+    def get_cache_stats(self):
+        """Получить статистику кэша"""
+        return {
+            'main_cache': self.cache.get_stats(),
+            'bulk_cache': self.bulk_cache.get_stats()
+        }
+
+
+# Единый глобальный экземпляр кэша остатков
+stock_cache = StockCache()

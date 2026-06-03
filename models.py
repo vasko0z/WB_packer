@@ -147,9 +147,8 @@ class Shipment:
             shipment_id = getattr(self, 'shipment_id', None)
             if shipment_id is not None:
                 from database import execute_query
-                from db_connection import get_db_type
-                db_type = get_db_type()
-                placeholder = "?" if db_type == "sqlite" else "%s"
+                from db_connection import get_db_placeholder
+                placeholder = get_db_placeholder()
                 result = execute_query(
                     f"SELECT box_id FROM boxes WHERE shipment_id = {placeholder}",
                     (shipment_id,),

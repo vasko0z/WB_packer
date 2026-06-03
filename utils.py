@@ -8,6 +8,8 @@ from config import get_resource_path
 import threading
 import queue
 import time
+import os
+from functools import lru_cache
 
 # Глобальная переменная для хранения громкости (0-100)
 _sound_volume = 100
@@ -235,3 +237,85 @@ def load_local_user():
         logger = logging.getLogger(__name__)
         logger.error(f"Не удалось загрузить локального пользователя: {e}")
     return None
+
+
+@lru_cache(maxsize=2)
+def find_and_register_font(bold=False):
+    """
+    Находит и регистрирует шрифт с поддержкой кириллицы для reportlab.
+    Результат кэшируется, повторный вызов не выполняет поиск.
+    
+    Args:
+        bold: Если True, ищет жирное начертание шрифта.
+    
+    Returns:
+        tuple: (font_name, font_path) или ('Helvetica', None) если шрифт не найден.
+    """
+    logger = logging.getLogger(__name__)
+    
+    possible_fonts = [
+        "arial.ttf", "Arial.ttf", "ARIAL.TTF",
+        "LiberationSans-Regular.ttf", "DejaVuSans.ttf",
+        "calibri.ttf", "Calibri.ttf", "CALIBRI.TTF",
+        "times.ttf", "Times.ttf", "TIMES.TTF"
+    ]
+    
+    possible_bold_fonts = [
+        "arialbd.ttf", "Arial Bold.ttf", "ARIALBD.TTF",
+        "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf"
+    ]
+    
+    system_font_paths = [
+        r"C:\Windows\Fonts\%s",
+        r"/usr/share/fonts/truetype/dejavu/%s",
+        r"/usr/share/fonts/truetype/liberation/%s",
+        r"/System/Library/Fonts/%s"
+    ]
+    
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    
+    search_list = possible_bold_fonts if bold else possible_fonts
+    
+    for font_name in search_list:
+        if os.path.exists(font_name):
+            font_path = font_name
+            break
+        for path_template in system_font_paths:
+            path = path_template % font_name
+            if os.path.exists(path):
+                font_path = path
+                break
+        if font_path:
+            break
+    else:
+        # Если bold не найден, пробуем получить bold из regular
+        if bold:
+            regular_path = find_and_register_font(bold=False)
+            if regular_path and regular_path[1]:
+                base = regular_path[1]
+                bold_variants = [
+                    base.replace('.ttf', ' Bold.ttf').replace('.TTF', ' Bold.TTF'),
+                    base.replace('Regular', 'Bold'),
+                    base.replace('regular', 'bold'),
+                ]
+                for bv in bold_variants:
+                    if os.path.exists(bv):
+                        font_path = bv
+                        break
+                if not font_path:
+                    return ('Helvetica-Bold', None)
+            else:
+                return ('Helvetica-Bold', None)
+        else:
+            return ('Helvetica', None)
+    
+    try:
+        font_key = 'CyrillicBold' if bold else 'CyrillicRegular'
+        pdfmetrics.registerFont(TTFont(font_key, font_path))
+        logger.info(f"Зарегистрирован шрифт: {font_key} ({font_path})")
+        return (font_key, font_path)
+    except Exception as e:
+        logger.warning(f"Не удалось зарегистрировать шрифт {font_path}: {e}")
+        fallback = 'Helvetica-Bold' if bold else 'Helvetica'
+        return (fallback, None)

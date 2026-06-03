@@ -120,7 +120,7 @@ class DatabaseSettingsDialog(QDialog):
                     if path and os.path.exists(path):
                         return path
         except Exception as e:
-            print(f"Ошибка при загрузке пути к папке бэкапов: {e}")
+            logger.error(f"Ошибка при загрузке пути к папке бэкапов: {e}")
         
         # Возвращаем путь по умолчанию, если не удалось загрузить
         return os.path.join(os.path.expanduser("~"), "Documents", "WB_Packer_Backups")
@@ -136,7 +136,7 @@ class DatabaseSettingsDialog(QDialog):
                 path = validator.sanitize_input(path)
                 # Проверяем безопасность пути
                 if not path_security.is_safe_path(os.path.expanduser("~"), path):
-                    print("Небезопасный путь к папке бэкапов")
+                    logger.warning("Небезопасный путь к папке бэкапов")
                     return
             
             # Создаем директорию для настроек, если она не существует
@@ -148,7 +148,7 @@ class DatabaseSettingsDialog(QDialog):
             
             # Проверяем безопасность пути к файлу настроек
             if not path_security.is_safe_path(settings_dir, settings_file):
-                print("Небезопасный путь к файлу настроек")
+                logger.warning("Небезопасный путь к файлу настроек")
                 return
             
             # Загружаем существующие настройки, если файл существует
@@ -165,7 +165,7 @@ class DatabaseSettingsDialog(QDialog):
                 json.dump(settings, f, ensure_ascii=False, indent=2)
                 
         except Exception as e:
-            print(f"Ошибка при сохранении пути к папке бэкапов: {e}")
+            logger.error(f"Ошибка при сохранении пути к папке бэкапов: {e}")
 
     def create_connection_tab(self):
         """Создает вкладку с настройками подключения к базе данных"""
@@ -620,7 +620,7 @@ class DatabaseSettingsDialog(QDialog):
                     )
                     if count_result:
                         total_records += count_result[0]
-                except:
+                except Exception:
                     # Если таблица не существует или возникла ошибка, пропускаем
                     continue
 
@@ -858,7 +858,7 @@ class DatabaseSettingsDialog(QDialog):
                 time_str = match.group(2)  # HHMMSS
                 formatted_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} {time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
                 return formatted_date
-        except:
+        except (ValueError, AttributeError):
             pass
         
         # Если не удалось извлечь дату из имени файла, возвращаем дату модификации
@@ -866,7 +866,7 @@ class DatabaseSettingsDialog(QDialog):
             filepath = os.path.join(self.backup_folder_path, filename)
             timestamp = os.path.getmtime(filepath)
             return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
-        except:
+        except (OSError, ValueError):
             return "Неизвестно"
     
     def restore_backup(self):

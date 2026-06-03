@@ -2,10 +2,13 @@
 """
 Simple splash screen for application startup
 """
+import logging
 import sys
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap, QFont
 from PyQt6.QtWidgets import QSplashScreen, QLabel, QWidget, QVBoxLayout, QProgressBar
+
+logger = logging.getLogger(__name__)
 
 
 def get_version_string():
@@ -70,7 +73,7 @@ class SplashScreen(QSplashScreen):
 
             self.show()
         except Exception as e:
-            print(f"Error initializing SplashScreen: {e}")
+            logger.error("Error initializing SplashScreen: %s", e)
             raise
 
     def set_progress(self, value, message=None):
@@ -81,7 +84,7 @@ class SplashScreen(QSplashScreen):
 
     def _auto_close(self):
         """Auto-close splash screen if it hangs"""
-        print("Splash screen timeout - auto closing")
+        logger.warning("Splash screen timeout - auto closing")
         self.close()
 
 
@@ -91,7 +94,7 @@ def show_splash():
         splash = SplashScreen()
         return splash
     except Exception as e:
-        print(f"Error creating splash screen: {e}")
+        logger.error("Error creating splash screen: %s", e)
         return None
 
 
@@ -105,4 +108,4 @@ def hide_splash(splash):
             splash.finish(None)
             splash.deleteLater()
     except Exception as e:
-        print(f"Error hiding splash screen: {e}")
+        logger.error("Error hiding splash screen: %s", e)

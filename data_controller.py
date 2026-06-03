@@ -4,7 +4,7 @@
 import logging
 from typing import TYPE_CHECKING, List, Dict, Any, Optional
 import config
-from db_connection import get_db_type
+from db_connection import get_db_type, get_db_placeholder
 
 if TYPE_CHECKING:
     from main_window import MainWindow
@@ -25,14 +25,14 @@ class DataController:
         """
         try:
             from database import execute_query
-            from db_connection import get_db_type
+            from db_connection import get_db_type, get_db_placeholder
 
             logger.info("Начало загрузки поставок из базы данных")
 
             # Определяем тип БД и используем правильный плейсхолдер
             # Используем get_db_type() вместо config.DATABASE_TYPE для учёта fallback
             db_type = get_db_type()
-            placeholder = "?" if db_type == "sqlite" else "%s"
+            placeholder = get_db_placeholder()
             archived_value = 0 if db_type == "sqlite" else False
             
             shipments_data = execute_query(
@@ -143,7 +143,7 @@ class DataController:
             return
         
         db_type = get_db_type()
-        placeholder = "?" if db_type == "sqlite" else "%s"
+        placeholder = get_db_placeholder()
         placeholders = ", ".join([placeholder] * len(shipment_ids))
         
         from database import execute_query
@@ -175,7 +175,7 @@ class DataController:
             return
         
         db_type = get_db_type()
-        placeholder = "?" if db_type == "sqlite" else "%s"
+        placeholder = get_db_placeholder()
         placeholders = ", ".join([placeholder] * len(shipment_ids))
         
         from database import execute_query
@@ -271,7 +271,7 @@ class DataController:
 
         # Определяем тип БД и используем правильный плейсхолдер
         db_type = get_db_type()
-        placeholder = "?" if db_type == "sqlite" else "%s"
+        placeholder = get_db_placeholder()
 
         items_data = execute_query(
             f"""
@@ -296,7 +296,7 @@ class DataController:
 
         # Определяем тип БД и используем правильный плейсхолдер
         db_type = get_db_type()
-        placeholder = "?" if db_type == "sqlite" else "%s"
+        placeholder = get_db_placeholder()
 
         logger.debug(f"Загрузка коробок для shipment_id={shipment_id_value}")
 
@@ -319,56 +319,59 @@ class DataController:
 
     def load_boxes_and_items(self, shipment, boxes_data: List[tuple]):
         """
-        Загрузка коробок и товаров в них
+        Загрузка коробок и товаров в них (один batch-запрос вместо N+1)
         """
         from database import execute_query
         from models import Box
 
-        # Определяем тип БД и используем правильный плейсхолдер
-        db_type = get_db_type()
-        placeholder = "?" if db_type == "sqlite" else "%s"
+        placeholder = get_db_placeholder()
 
         current_box_index = -1
         logger.debug(f"Загрузка коробок: {len(boxes_data)} коробок найдено")
 
-        for i, (box_db_id, box_id, is_current) in enumerate(boxes_data):
-            # Декодируем box_id если это bytes
-            if isinstance(box_id, bytes):
-                box_id = box_id.decode('utf-8')
-            elif isinstance(box_id, str):
-                box_id = box_id
-            
-            logger.debug(f"Коробка {i}: box_db_id={box_db_id}, box_id={box_id}, is_current={is_current}")
-
-            box = Box(box_id)
-
-            # Загружаем товары в коробке
-            box_items = execute_query(
-                f"""
-                SELECT barcode, qty
-                FROM box_items
-                WHERE box_id = {placeholder}
-                """,
-                (box_db_id,),
+        batch_box_ids = [str(b[0]) for b in boxes_data if b[0] is not None]
+        items_by_box = {}
+        if batch_box_ids:
+            placeholders = ", ".join([placeholder] * len(batch_box_ids))
+            all_box_items = execute_query(
+                f"SELECT box_id, barcode, qty FROM box_items WHERE box_id IN ({placeholders})",
+                tuple(batch_box_ids),
                 fetchall=True
             )
-
-            logger.debug(f"Коробка {box_id}: загружено {len(box_items)} товаров")
-            
-            # Оптимизированная загрузка товаров в коробке
-            box_items_dict = {}
-            for barcode, qty in box_items:
+            for box_id_val, barcode, qty in (all_box_items or []):
                 if isinstance(barcode, bytes):
                     barcode = barcode.decode('utf-8')
                 normalized_bc = str(barcode).replace(" ", "").replace("-", "").replace("\t", "")
-                box_items_dict[normalized_bc] = qty
-            box.items = box_items_dict
+                items_by_box.setdefault(str(box_id_val), {})[normalized_bc] = qty
 
+        for i, (box_db_id, box_id, is_current) in enumerate(boxes_data):
+            if isinstance(box_id, bytes):
+                box_id = box_id.decode('utf-8')
+            box = Box(box_id)
+            box.items = items_by_box.get(str(box_db_id), {})
             shipment.boxes.append(box)
             if is_current:
                 current_box_index = i
+
         shipment.current_box_index = current_box_index
         logger.debug(f"Всего коробок в поставке: {len(shipment.boxes)}, current_box_index={shipment.current_box_index}")
+
+    @staticmethod
+    def _build_shipments_upsert(shipment, removed_items_json, parent_group, properties_json, archived_date, placeholder, use_sqlite, return_id=True):
+        """Строит SQL и параметры для UPSERT поставки. Возвращает (sql, params)."""
+        cols = "destination_name, font_size, label_font_size, theme, removed_items, parent_group, properties, archived, archived_date, archived_by"
+        vals = ", ".join([placeholder] * 10)
+        update_set = ", ".join(f"{c} = {'excluded.' if not use_sqlite else ''}{c}" for c in ["font_size", "label_font_size", "theme", "removed_items", "parent_group", "properties", "archived", "archived_date", "archived_by"])
+
+        archived_val = 1 if shipment.archived else 0 if use_sqlite else shipment.archived
+        params = (shipment.destination_name, shipment.font_size, shipment.label_font_size,
+                  shipment.theme, removed_items_json, parent_group if parent_group else None,
+                  properties_json, archived_val, archived_date if archived_date else None,
+                  shipment.archived_by if shipment.archived_by else None)
+
+        returning = " RETURNING id" if return_id and not use_sqlite else ""
+        sql = f"""INSERT INTO shipments ({cols}) VALUES ({vals}) ON CONFLICT(destination_name) DO UPDATE SET {update_set}{returning}"""
+        return (sql, params)
 
     def save_shipment(self, shipment, preserve_box_items=False) -> bool:
         """
@@ -379,7 +382,7 @@ class DataController:
         try:
             import json
             from database import execute_query
-            from db_connection import get_db_type, execute_transaction, get_connection
+            from db_connection import get_db_type, get_db_placeholder, execute_transaction, get_connection
 
             removed_items_json = json.dumps(shipment.removed_items, ensure_ascii=False)
             parent_group = shipment.parent_group.group_name if shipment.parent_group else None
@@ -389,42 +392,14 @@ class DataController:
 
             db_type = get_db_type()
             use_sqlite = db_type == "sqlite"
-            placeholder = "?" if use_sqlite else "%s"
+            placeholder = get_db_placeholder()
 
             # 1. UPSERT данных поставки (не трогаем поля других пользователей)
             if use_sqlite:
+                sql, params = self._build_shipments_upsert(shipment, removed_items_json, parent_group, properties_json, archived_date, "?", True)
                 conn = get_connection()
                 cursor = conn.cursor()
-                # INSERT OR REPLACE приводит к DELETE + INSERT, что вызывает CASCADE удаление shipment_items
-                # Используем INSERT ... ON CONFLICT DO UPDATE для сохранения связанных записей
-                cursor.execute("""
-                    INSERT INTO shipments (
-                        destination_name, font_size, label_font_size, theme,
-                        removed_items, parent_group, properties,
-                        archived, archived_date, archived_by
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(destination_name) DO UPDATE SET
-                        font_size = excluded.font_size,
-                        label_font_size = excluded.label_font_size,
-                        theme = excluded.theme,
-                        removed_items = excluded.removed_items,
-                        parent_group = excluded.parent_group,
-                        properties = excluded.properties,
-                        archived = excluded.archived,
-                        archived_date = excluded.archived_date,
-                        archived_by = excluded.archived_by
-                """, (
-                    shipment.destination_name,
-                    shipment.font_size,
-                    shipment.label_font_size,
-                    shipment.theme,
-                    removed_items_json,
-                    parent_group if parent_group else None,
-                    properties_json,
-                    1 if shipment.archived else 0,
-                    archived_date if archived_date else None,
-                    shipment.archived_by if shipment.archived_by else None
-                ))
+                cursor.execute(sql, params)
                 conn.commit()
                 result = execute_query(
                     "SELECT id FROM shipments WHERE destination_name = ?",
@@ -433,29 +408,8 @@ class DataController:
                 )
                 shipment_id = result[0] if result else None
             else:
-                result = execute_query(
-                    f"""
-                    INSERT INTO shipments (destination_name, font_size, label_font_size, theme, removed_items, parent_group, properties, archived, archived_date, archived_by)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-                    ON CONFLICT (destination_name) DO UPDATE SET
-                        font_size = EXCLUDED.font_size,
-                        label_font_size = EXCLUDED.label_font_size,
-                        theme = EXCLUDED.theme,
-                        removed_items = EXCLUDED.removed_items,
-                        parent_group = EXCLUDED.parent_group,
-                        properties = EXCLUDED.properties,
-                        archived = EXCLUDED.archived,
-                        archived_date = EXCLUDED.archived_date,
-                        archived_by = EXCLUDED.archived_by
-                    RETURNING id
-                    """,
-                    (shipment.destination_name, shipment.font_size, shipment.label_font_size,
-                     shipment.theme, removed_items_json,
-                     parent_group if parent_group else None, properties_json,
-                     shipment.archived, archived_date if archived_date else None,
-                     shipment.archived_by if shipment.archived_by else None),
-                    fetchone=True
-                )
+                sql, params = self._build_shipments_upsert(shipment, removed_items_json, parent_group, properties_json, archived_date, placeholder, False)
+                result = execute_query(sql, params, fetchone=True)
                 shipment_id = result[0] if result else None
 
             if shipment_id is not None:
@@ -523,7 +477,7 @@ class DataController:
 
             # Удаляем коробки, которых нет в локальной модели
             # Сначала получаем все коробки из БД
-            select_placeholder = "?" if use_sqlite else "%s"
+            select_placeholder = get_db_placeholder()
             db_boxes = execute_query(
                 f"SELECT box_id FROM boxes WHERE shipment_id = {select_placeholder}",
                 (shipment_id,),
@@ -627,7 +581,7 @@ class DataController:
         try:
             import json
             from database import execute_query
-            from db_connection import get_db_type, get_connection
+            from db_connection import get_db_type, get_db_placeholder, get_connection
 
             removed_items_json = json.dumps(shipment.removed_items, ensure_ascii=False)
             parent_group = shipment.parent_group.group_name if shipment.parent_group else None
@@ -636,64 +590,16 @@ class DataController:
 
             db_type = get_db_type()
             use_sqlite = db_type == "sqlite"
-            placeholder = "?" if use_sqlite else "%s"
+            placeholder = get_db_placeholder()
 
+            sql, params = self._build_shipments_upsert(shipment, removed_items_json, parent_group, properties_json, archived_date, placeholder, use_sqlite, return_id=False)
             if use_sqlite:
                 conn = get_connection()
                 cursor = conn.cursor()
-                # INSERT OR REPLACE приводит к DELETE + INSERT, что вызывает CASCADE удаление shipment_items
-                # Используем INSERT ... ON CONFLICT DO UPDATE для сохранения связанных записей
-                cursor.execute("""
-                    INSERT INTO shipments (
-                        destination_name, font_size, label_font_size, theme,
-                        removed_items, parent_group, properties,
-                        archived, archived_date, archived_by
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(destination_name) DO UPDATE SET
-                        font_size = excluded.font_size,
-                        label_font_size = excluded.label_font_size,
-                        theme = excluded.theme,
-                        removed_items = excluded.removed_items,
-                        parent_group = excluded.parent_group,
-                        properties = excluded.properties,
-                        archived = excluded.archived,
-                        archived_date = excluded.archived_date,
-                        archived_by = excluded.archived_by
-                """, (
-                    shipment.destination_name,
-                    shipment.font_size,
-                    shipment.label_font_size,
-                    shipment.theme,
-                    removed_items_json,
-                    parent_group if parent_group else None,
-                    properties_json,
-                    1 if shipment.archived else 0,
-                    archived_date if archived_date else None,
-                    shipment.archived_by if shipment.archived_by else None
-                ))
+                cursor.execute(sql, params)
                 conn.commit()
             else:
-                execute_query(
-                    f"""
-                    INSERT INTO shipments (destination_name, font_size, label_font_size, theme, removed_items, parent_group, properties, archived, archived_date, archived_by)
-                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
-                    ON CONFLICT (destination_name) DO UPDATE SET
-                        font_size = EXCLUDED.font_size,
-                        label_font_size = EXCLUDED.label_font_size,
-                        theme = EXCLUDED.theme,
-                        removed_items = EXCLUDED.removed_items,
-                        parent_group = EXCLUDED.parent_group,
-                        properties = EXCLUDED.properties,
-                        archived = EXCLUDED.archived,
-                        archived_date = EXCLUDED.archived_date,
-                        archived_by = EXCLUDED.archived_by
-                    """,
-                    (shipment.destination_name, shipment.font_size, shipment.label_font_size,
-                     shipment.theme, removed_items_json,
-                     parent_group if parent_group else None, properties_json,
-                     shipment.archived, archived_date if archived_date else None,
-                     shipment.archived_by if shipment.archived_by else None),
-                )
+                execute_query(sql, params)
             return True
         except Exception as e:
             logger.error(f"Ошибка сохранения метаданных поставки: {e}", exc_info=True)
@@ -714,7 +620,7 @@ class DataController:
         try:
             import json
             from database import execute_query
-            from db_connection import get_db_type, execute_transaction
+            from db_connection import get_db_type, get_db_placeholder, execute_transaction
 
             if box_index is None:
                 box_index = shipment.current_box_index
@@ -729,7 +635,7 @@ class DataController:
             # Определяем тип БД
             db_type = get_db_type()
             use_sqlite = db_type == "sqlite"
-            placeholder = "?" if use_sqlite else "%s"
+            placeholder = get_db_placeholder()
 
             # 1. Сохраняем основные данные поставки (быстрое обновление)
             removed_items_json = json.dumps(shipment.removed_items, ensure_ascii=False)
@@ -737,39 +643,10 @@ class DataController:
             properties_json = json.dumps(shipment.properties.to_dict(), ensure_ascii=False)
             archived_date = shipment.archived_date.isoformat() if shipment.archived_date else None
 
+            ph = placeholder
+            sql, params = self._build_shipments_upsert(shipment, removed_items_json, parent_group, properties_json, archived_date, ph, use_sqlite)
             if use_sqlite:
-                # INSERT OR REPLACE приводит к DELETE + INSERT, что вызывает CASCADE удаление shipment_items
-                # Используем INSERT ... ON CONFLICT DO UPDATE для сохранения связанных записей
-                execute_query("""
-                    INSERT INTO shipments (
-                        destination_name, font_size, label_font_size, theme,
-                        removed_items, parent_group, properties,
-                        archived, archived_date, archived_by
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(destination_name) DO UPDATE SET
-                        font_size = excluded.font_size,
-                        label_font_size = excluded.label_font_size,
-                        theme = excluded.theme,
-                        removed_items = excluded.removed_items,
-                        parent_group = excluded.parent_group,
-                        properties = excluded.properties,
-                        archived = excluded.archived,
-                        archived_date = excluded.archived_date,
-                        archived_by = excluded.archived_by
-                """, (
-                    shipment.destination_name,
-                    shipment.font_size,
-                    shipment.label_font_size,
-                    shipment.theme,
-                    removed_items_json,
-                    parent_group if parent_group else None,
-                    properties_json,
-                    1 if shipment.archived else 0,
-                    archived_date if archived_date else None,
-                    shipment.archived_by if shipment.archived_by else None
-                ))
-
-                # Получаем ID поставки
+                execute_query(sql, params)
                 result = execute_query(
                     "SELECT id FROM shipments WHERE destination_name = ?",
                     (shipment.destination_name,),
@@ -777,27 +654,7 @@ class DataController:
                 )
                 shipment_id = result[0] if result else None
             else:
-                result = execute_query("""
-                    INSERT INTO shipments (destination_name, font_size, label_font_size, theme, removed_items, parent_group, properties, archived, archived_date, archived_by)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (destination_name) DO UPDATE SET
-                        font_size = EXCLUDED.font_size,
-                        label_font_size = EXCLUDED.label_font_size,
-                        theme = EXCLUDED.theme,
-                        removed_items = EXCLUDED.removed_items,
-                        parent_group = EXCLUDED.parent_group,
-                        properties = EXCLUDED.properties,
-                        archived = EXCLUDED.archived,
-                        archived_date = EXCLUDED.archived_date,
-                        archived_by = EXCLUDED.archived_by
-                    RETURNING id
-                """, (
-                    shipment.destination_name, shipment.font_size, shipment.label_font_size,
-                    shipment.theme, removed_items_json,
-                    parent_group if parent_group else None, properties_json,
-                    shipment.archived, archived_date if archived_date else None,
-                    shipment.archived_by if shipment.archived_by else None
-                ), fetchone=True)
+                result = execute_query(sql, params, fetchone=True)
                 shipment_id = result[0] if result else None
 
             if shipment_id is not None:
@@ -975,7 +832,7 @@ class DataController:
             from datetime import datetime
 
             db_type = get_db_type()
-            placeholder = "?" if db_type == "sqlite" else "%s"
+            placeholder = get_db_placeholder()
             archived_value = 1 if db_type == "sqlite" else True
             archived_date = datetime.now().isoformat()
             
@@ -997,7 +854,7 @@ class DataController:
             from database import execute_query
 
             db_type = get_db_type()
-            placeholder = "?" if db_type == "sqlite" else "%s"
+            placeholder = get_db_placeholder()
             archived_value = 0 if db_type == "sqlite" else False
             
             execute_query(
@@ -1018,7 +875,7 @@ class DataController:
             from database import execute_query
 
             db_type = get_db_type()
-            placeholder = "?" if db_type == "sqlite" else "%s"
+            placeholder = get_db_placeholder()
             
             execute_query(
                 f"DELETE FROM shipments WHERE destination_name = {placeholder}",
@@ -1038,7 +895,7 @@ class DataController:
             from database import execute_query
 
             db_type = get_db_type()
-            placeholder = "?" if db_type == "sqlite" else "%s"
+            placeholder = get_db_placeholder()
             archived_value = 1 if db_type == "sqlite" else True
 
             result = execute_query(
@@ -1064,7 +921,7 @@ class DataController:
             from database import get_connection
 
             db_type = get_db_type()
-            placeholder = "?" if db_type == "sqlite" else "%s"
+            placeholder = get_db_placeholder()
             
             conn = get_connection()
             cursor = conn.cursor()

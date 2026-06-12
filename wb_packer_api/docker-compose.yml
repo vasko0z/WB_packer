@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: wb_packer
+      POSTGRES_USER: wb_packer
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wb_packer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: wb_packer
+      POSTGRES_USER: wb_packer
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      API_KEYS: ${API_KEYS:-dev-key-change-me}
+      GSHEETS_CREDENTIALS: ${GSHEETS_CREDENTIALS:-}
+      MOYSKLAD_TOKEN: ${MOYSKLAD_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: always
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+    restart: always
+
+volumes:
+  pgdata:

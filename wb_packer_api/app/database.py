@@ -163,6 +163,16 @@ def init_schema():
                     PRIMARY KEY (barcode, shipment_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS item_retire_log (
+                    id SERIAL PRIMARY KEY,
+                    shipment_id INTEGER NOT NULL REFERENCES shipments(id) ON DELETE CASCADE,
+                    barcode TEXT NOT NULL,
+                    qty INTEGER NOT NULL,
+                    reason TEXT DEFAULT '',
+                    retired_by TEXT DEFAULT '',
+                    retired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE TABLE IF NOT EXISTS cache_invalidation (
                     id SERIAL PRIMARY KEY,
                     shipment_id INTEGER NOT NULL REFERENCES shipments(id) ON DELETE CASCADE,

@@ -29,7 +29,7 @@ async def export_data():
     data = {}
     tables = ["shipments", "shipment_items", "boxes", "box_items", "sku", "stock_cache",
               "packer_users", "app_settings", "window_state", "user_sessions",
-              "item_locks", "cache_invalidation"]
+              "item_locks", "item_retire_log", "cache_invalidation"]
     with get_connection() as conn:
         with conn.cursor() as cur:
             for table in tables:
@@ -76,7 +76,7 @@ async def import_data(data: ImportData):
 @router.post("/clear")
 async def clear_database():
     tables = ["box_items", "boxes", "shipment_items", "shipments", "user_sessions",
-              "item_locks", "cache_invalidation", "sku", "stock_cache",
+              "item_locks", "item_retire_log", "cache_invalidation", "sku", "stock_cache",
               "packer_users", "app_settings", "window_state"]
     with get_connection() as conn:
         with conn.cursor() as cur:

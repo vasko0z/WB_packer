@@ -204,6 +204,24 @@ class StockUpdate(BaseModel):
     quantity: int
 
 
+# --- Retire Log ---
+class RetireLogCreate(BaseModel):
+    barcode: str
+    qty: int = 1
+    reason: str = ""
+    retired_by: str = ""
+
+
+class RetireLogOut(BaseModel):
+    id: int
+    shipment_id: int
+    barcode: str
+    qty: int
+    reason: str = ""
+    retired_by: str = ""
+    retired_at: Optional[str] = None
+
+
 # --- Admin ---
 class ImportData(BaseModel):
     shipments: List[Dict[str, Any]] = []

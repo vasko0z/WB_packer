@@ -10,7 +10,7 @@ from .config import settings
 from .database import init_schema
 from .routers import (
     shipments, boxes, items, sku, users, settings as settings_router,
-    sessions, google_sheets, moysklad, stock, admin
+    sessions, google_sheets, moysklad, stock, admin, retire_log
 )
 
 logger = logging.getLogger(__name__)
@@ -76,3 +76,4 @@ app.include_router(google_sheets.router, prefix="/api/google-sheets", tags=["goo
 app.include_router(moysklad.router, prefix="/api/moysklad", tags=["moysklad"])
 app.include_router(stock.router, prefix="/api/stock", tags=["stock"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(retire_log.router, prefix="/api/shipments", tags=["retire-log"])

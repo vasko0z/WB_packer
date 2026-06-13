@@ -1,0 +1,20 @@
+services:
+  packer_api:
+    build: .
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: wb_packer
+      POSTGRES_USER: wb_packer_user
+      POSTGRES_PASSWORD: f391b64ab56e88c10aca3525d945cee9
+      API_KEYS: 539cab1a0b701ecc7d0484b4887dfa3ad693f7d38c9c599db477ff51f08e6f53
+      CORS_ORIGINS: "*"
+      LOG_LEVEL: INFO
+    restart: always
+    networks:
+      - wbpacker_network
+
+networks:
+  wbpacker_network:
+    external: true
+    name: wbpacker_remote_wbpacker_network
